@@ -20,3 +20,8 @@ Install Tampermonkey, then open `geofs-defensive-ai.user.js` (raw) and confirm t
 
 ## missiledb/
 Air-to-air missile alias database (100 missiles, ~4,700 aliases) with FOX type and countermeasure lookups. Regenerate with `python build.py`.
+## v4.0
+- Automatic identity detection (callsign, username, display name) with live callsign-change tracking
+- Setup wizard fallback, Alt+D settings panel, debug panel
+- Persistent settings and cooldowns via localStorage
+

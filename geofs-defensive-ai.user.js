@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GeoFS Defensive AI
 // @namespace    GeoFS
-// @version      3.0
-// @description  Combat state engine: lock -> fire -> countermeasure -> hit/miss, per-attacker engagements, 5s defense timer
+// @version      4.0
+// @description  Combat assistant: auto identity detection, lock -> fire -> countermeasure -> hit/miss state engine, confidence scoring, HUD, settings (Alt+D)
 // @match        https://www.geo-fs.com/*
 // @grant        none
 // ==/UserScript==
@@ -25,21 +25,31 @@
 
     // ---------- SettingsManager ----------
     class SettingsManager {
-        static get KEY() { return 'geofs_defense_ai_v3'; }
+        static get KEY() { return 'geofs_defense_ai_v4'; }
         static get DEFAULTS() {
             return {
-                enabled: true,
-                aliases: ['A1', 'Riley', 'Belgium', 'Belgian Empire', 'Alpha One', 'Alpha1'],
-                autoChat: true, hud: true, audio: false, debug: false,
-                windowMs: 60000, windowSize: 50, lockLifeMs: 30000, counterWindowMs: 5000
+                enabled: true, autoChat: true, hud: true, sounds: false,
+                customAliases: [], storedAliases: [], disabledDetected: [],
+                cooldowns: {}, wizardDone: false,
+                windowMs: 60000, windowSize: 50, lockLifeMs: 30000, counterWindowMs: 5000,
+                confidenceMin: 70, dedupeMs: 10000, replyCooldownMs: 5000
             };
         }
         constructor() {
             this.data = Object.assign({}, SettingsManager.DEFAULTS);
             this.listeners = [];
             try {
-                const raw = window.localStorage && window.localStorage.getItem(SettingsManager.KEY);
+                const ls = window.localStorage;
+                const raw = ls && ls.getItem(SettingsManager.KEY);
                 if (raw) Object.assign(this.data, JSON.parse(raw));
+                else {
+                    const old = ls && ls.getItem('geofs_defense_ai_v3');
+                    if (old) {
+                        const o = JSON.parse(old);
+                        ['enabled', 'autoChat', 'hud'].forEach(k => { if (typeof o[k] === 'boolean') this.data[k] = o[k]; });
+                        if (typeof o.audio === 'boolean') this.data.sounds = o.audio;
+                    }
+                }
             } catch (e) { /* ignore */ }
         }
         get(k) { return this.data[k]; }
@@ -52,13 +62,122 @@
     }
 
     // ---------- AliasManager ----------
-    class AliasManager {
-        constructor(list) { this.set(list || []); }
-        set(list) {
-            this.list = list.filter(Boolean);
-            this.canons = new Set(this.list.map(canon).filter(Boolean));
+    // Detects the logged-in player by scanning GeoFS globals.
+    class IdentityDetector {
+        constructor() { this.info = IdentityDetector.empty(); }
+        static empty() { return { callsign: '', username: '', display: '', pilot: '', myId: '', sources: [] }; }
+        static str(v) {
+            if (typeof v !== 'string' && typeof v !== 'number') return '';
+            const s = String(v).trim();
+            return s.length > 0 && s.length <= 40 ? s : '';
         }
-        add(name) { if (name) this.set(this.list.concat([name])); }
+        _roots() {
+            const r = [], w = window;
+            const add = (n, o) => { if (o && typeof o === 'object') r.push([n, o]); };
+            try {
+                const g = w.geofs, mp = w.multiplayer;
+                add('geofs.userRecord', g && g.userRecord);
+                add('geofs.user', g && g.user);
+                add('geofs.api', g && g.api);
+                add('multiplayer', mp);
+                add('multiplayer.user', mp && mp.user);
+                add('multiplayer.userRecord', mp && mp.userRecord);
+                add('multiplayer.player', mp && mp.player);
+                add('multiplayer.aircraft', mp && mp.aircraft);
+                if (mp && mp.myId != null && mp.users) add('multiplayer.users[myId]', mp.users[mp.myId]);
+                add('window.user', w.user);
+                add('window.userRecord', w.userRecord);
+                add('geofs.aircraft.instance', g && g.aircraft && g.aircraft.instance);
+            } catch (e) { /* ignore */ }
+            return r;
+        }
+        static classify(key, userLike) {
+            const k = String(key).toLowerCase().replace(/[_-]/g, '');
+            if (k === 'callsign') return 'callsign';
+            if (k === 'username' || k === 'login' || k === 'accountname') return 'username';
+            if (k === 'displayname' || k === 'nickname' || k === 'nick') return 'display';
+            if (k === 'pilotname' || k === 'pilot' || k === 'fullname' || k === 'realname') return 'pilot';
+            if (k === 'name' && userLike) return 'username';
+            return '';
+        }
+        detect() {
+            const info = IdentityDetector.empty();
+            const seen = new Set();
+            const scan = (src, obj, depth) => {
+                if (!obj || seen.has(obj)) return;
+                seen.add(obj);
+                const userLike = /user|player/i.test(src);
+                let keys; try { keys = Object.keys(obj).slice(0, 120); } catch (e) { return; }
+                for (const k of keys) {
+                    let v; try { v = obj[k]; } catch (e) { continue; }
+                    const cat = IdentityDetector.classify(k, userLike);
+                    const s = IdentityDetector.str(v);
+                    if (cat && s && !info[cat]) { info[cat] = s; info.sources.push(cat + '<-' + src + '.' + k); }
+                    else if (depth < 1 && v && typeof v === 'object' && /^(user|userrecord|player|account|profile)$/i.test(k)) scan(src + '.' + k, v, depth + 1);
+                }
+            };
+            for (const [n, o] of this._roots()) scan(n, o, 0);
+            try {
+                if (!info.callsign && typeof document !== 'undefined') {
+                    const el = document.querySelector('input[name="callsign"], #callsign, .geofs-callsign');
+                    const s = el && IdentityDetector.str(el.value || el.textContent);
+                    if (s) { info.callsign = s; info.sources.push('callsign<-DOM'); }
+                }
+                const mp = window.multiplayer;
+                if (mp && mp.myId != null) info.myId = String(mp.myId);
+            } catch (e) { /* ignore */ }
+            this.info = info;
+            return info;
+        }
+        aliases() {
+            const i = this.info, out = [];
+            [i.callsign, i.username, i.display, i.pilot].forEach(s => { if (s && !out.some(o => canon(o) === canon(s))) out.push(s); });
+            return out;
+        }
+    }
+
+    class AliasManager {
+        constructor(settings, identity) {
+            this.s = settings; this.identity = identity;
+            this.detected = []; this.custom = []; this.stored = []; this.active = [];
+            this.status = 'PENDING'; this.canons = new Set(); this._key = '';
+            this.rebuild();
+        }
+        _norm(list) {
+            const out = [];
+            list.forEach(a => { if (a && !out.some(o => canon(o) === canon(a))) out.push(String(a).trim()); });
+            return out;
+        }
+        rebuild() {
+            const off = new Set((this.s.get('disabledDetected') || []).map(canon));
+            this.custom = this._norm(this.s.get('customAliases') || []);
+            this.stored = this._norm(this.s.get('storedAliases') || []);
+            const det = this.detected.filter(a => !off.has(canon(a)));
+            // detected first, stored fallback, then manual
+            this.active = this._norm((det.length ? det : (this.detected.length ? [] : this.stored)).concat(this.custom));
+            this.canons = new Set(this.active.map(canon).filter(Boolean));
+        }
+        // Re-detect identity. Returns what happened so callers can notify.
+        refresh() {
+            const info = this.identity.detect();
+            this.detected = this.identity.aliases();
+            const key = this.detected.map(canon).join('|');
+            const prev = this._key;
+            let changed = false;
+            if (this.detected.length) {
+                if (key !== prev) {
+                    changed = !!prev;
+                    this.s.set('storedAliases', this.detected.slice());
+                    this._key = key;
+                }
+                this.status = 'OK';
+            } else {
+                this.status = 'FAILED';
+            }
+            this.rebuild();
+            return { status: this.status, changed, callsign: info.callsign || this.detected[0] || '' };
+        }
+        ownNames() { return this.detected.length ? this.detected : this.stored; }
         // Is the text after "on" the user? Exact canonical match on first 1-3 words.
         isUser(text) {
             const words = normalize(text).split(' ').filter(Boolean);
@@ -66,6 +185,17 @@
                 if (this.canons.has(canon(words.slice(0, n).join(' ')))) return true;
             }
             return false;
+        }
+        // Find any alias n-gram inside free text; returns the matched words or ''.
+        findIn(text) {
+            const words = normalize(text).split(' ').filter(Boolean);
+            for (let i = 0; i < words.length; i++) {
+                for (let n = Math.min(3, words.length - i); n >= 1; n--) {
+                    const g = words.slice(i, i + n).join(' ');
+                    if (this.canons.has(canon(g))) return g;
+                }
+            }
+            return '';
         }
     }
 
@@ -143,9 +273,9 @@
         return ev;
     }
 
-    // ---------- CombatEngine ----------
+    // ---------- ThreatStateManager ----------
     // States: LOCKED, LAUNCHED, COUNTERED, HIT, MISSED, EXPIRED
-    class CombatEngine {
+    class ThreatStateManager {
         constructor(settings, aliases, opts) {
             this.s = settings;
             this.aliases = aliases;
@@ -153,7 +283,10 @@
             this.engagements = [];
             this.nextId = 1;
             this.listeners = { change: [], reply: [], event: [] };
-            this.buffer = new MessageBuffer(settings.get('windowSize'), settings.get('windowMs'));
+        }
+        findLock(att, t) {
+            const life = this.s.get('lockLifeMs');
+            return this._newest(this._live(att, 'LOCKED').filter(e => t - e.lockedAt <= life));
         }
         on(type, f) { this.listeners[type].push(f); }
         _emit(type, a, b) { this.listeners[type].forEach(f => { try { f(a, b); } catch (e) { /* ignore */ } }); }
@@ -168,27 +301,18 @@
             this._emit('change', e);
         }
 
-        // Entry point for each chat message. mine=true for the user's own messages.
-        process(msg) {
-            const t = msg.t != null ? msg.t : this.now();
-            const text = msg.text || '';
-            const sender = msg.sender || '?';
-            const mine = !!msg.mine;
-            this.buffer.add({ t, sender, text });
-            const events = parseMessage(text);
-            for (const ev of events) {
-                if (mine) { if (ev.type === 'COUNTER') this._onOwnCounter(ev); continue; }
-                const att = String(sender).toLowerCase();
-                switch (ev.type) {
-                    case 'LOCK': this._onLock(att, sender, ev, t); break;
-                    case 'LOST_LOCK': this._onLostLock(att); break;
-                    case 'LAUNCH': this._onLaunch(att, sender, ev, t); break;
-                    case 'GUNS': this._onGuns(att, sender, ev, t); break;
-                    case 'HIT': this._onResult(att, ev, 'HIT'); break;
-                    case 'MISS': this._onResult(att, ev, 'MISSED'); break;
-                }
+        // Apply one already-validated combat event.
+        apply(ev, sender, t, mine) {
+            if (mine) { if (ev.type === 'COUNTER') this._onOwnCounter(ev); return; }
+            const att = String(sender).toLowerCase();
+            switch (ev.type) {
+                case 'LOCK': this._onLock(att, sender, ev, t); break;
+                case 'LOST_LOCK': this._onLostLock(att); break;
+                case 'LAUNCH': this._onLaunch(att, sender, ev, t); break;
+                case 'GUNS': this._onGuns(att, sender, ev, t); break;
+                case 'HIT': this._onResult(att, ev, 'HIT'); break;
+                case 'MISS': this._onResult(att, ev, 'MISSED'); break;
             }
-            return events;
         }
 
         _make(att, name, ev, phase, t) {
@@ -292,7 +416,6 @@
                     this._emit('event', 'UNRESOLVED', e);
                 }
             }
-            this.buffer.prune(now);
             this._emit('change', null);
         }
 
@@ -329,7 +452,7 @@
             o.start(c.currentTime + start); o.stop(c.currentTime + start + dur + 0.02);
         }
         play(kind) {
-            if (!this.s.get('audio') || !this.ctx) return;
+            if (!this.s.get('sounds') || !this.ctx) return;
             const now = Date.now();
             if (this.last[kind] && now - this.last[kind] < 1500) return;
             this.last[kind] = now;
@@ -356,6 +479,7 @@
                 '#gdai-hud{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;pointer-events:none;align-items:center}' +
                 '.gdai-alert{min-width:260px;padding:8px 16px;border-radius:6px;color:#fff;font:600 14px/1.35 Arial,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.5);animation:gdai-in .25s ease-out;transition:opacity .5s}' +
                 '.gdai-alert.out{opacity:0}' +
+                '.gdai-toast{min-width:260px;padding:6px 14px;border-radius:6px;color:#fff;font:700 13px Arial,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.5);animation:gdai-in .25s ease-out;transition:opacity .5s}' +
                 '.gdai-title{font-size:18px;font-weight:800;letter-spacing:.5px}' +
                 '.gdai-timer{font-size:26px;font-weight:800;float:right;margin-left:14px}' +
                 '@keyframes gdai-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}';
@@ -394,7 +518,7 @@
             if (!this.root) return;
             const now = this.engine.now();
             const live = new Set();
-            for (const e of this.engine.engagements) {
+            for (const e of this._top(now)) {
                 const terminal = e.phase !== 'LOCKED' && e.phase !== 'LAUNCHED';
                 if (e.phase === 'EXPIRED' && !e.unresolved) { this._drop(e.id); continue; }
                 if (terminal && now - e.changedAt > 3500) { this._drop(e.id); continue; }
@@ -417,9 +541,37 @@
                 else n.el.style.color = '#fff';
                 n.timer.textContent = d.timer;
                 n.title.textContent = '\u26A0 ' + d.title;
-                n.body.textContent = d.lines.join('  |  ');
+                n.body.textContent = d.lines.join('  |  ') + (this.extra > 0 ? '  |  +' + this.extra + ' MORE' : '');
             }
             for (const id of Array.from(this.nodes.keys())) if (!live.has(id)) this._drop(id);
+        }
+        // Only the highest-priority active engagement is shown: radar > IR > guns > other.
+        _top(now) {
+            const rank = e => {
+                if (e.phase === 'LAUNCHED') return { radar: 1, ir: 2, gun: 3 }[e.cls] || 4;
+                return e.phase === 'LOCKED' ? 5 : 6;
+            };
+            const c = this.engine.engagements.filter(e => {
+                if (e.phase === 'EXPIRED' && !e.unresolved) return false;
+                return !(e.phase !== 'LOCKED' && e.phase !== 'LAUNCHED' && now - e.changedAt > 3500);
+            });
+            c.sort((a, b) => rank(a) - rank(b) || b.t0 - a.t0);
+            this.extra = Math.max(0, c.length - 1);
+            return c.slice(0, 1);
+        }
+        notify(text, color, ms) {
+            if (!this.s.get('hud')) return;
+            this._ensure();
+            if (!this.root) return;
+            const el = document.createElement('div');
+            el.className = 'gdai-toast';
+            el.style.background = COLORS[color || 'orange'];
+            el.textContent = text;
+            this.root.appendChild(el);
+            setTimeout(() => {
+                el.classList.add('out');
+                setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 500);
+            }, ms || 4000);
         }
         _drop(id) {
             const n = this.nodes.get(id); if (!n) return;
@@ -430,30 +582,91 @@
         clear() { Array.from(this.nodes.keys()).forEach(id => this._drop(id)); }
     }
 
+    // ---------- ThreatDetector ----------
+    // Parses chat, scores confidence, suppresses duplicates, feeds ThreatStateManager.
+    class ThreatDetector {
+        constructor(settings, aliases, state) {
+            this.s = settings; this.aliases = aliases; this.state = state;
+            this.buffer = new MessageBuffer(settings.get('windowSize'), settings.get('windowMs'));
+            this.recent = new Map();
+            this.last = [];
+        }
+        tick() {
+            const now = this.state.now();
+            this.state.tick();
+            this.buffer.prune(now);
+            for (const [k, t] of this.recent) if (now - t > this.s.get('dedupeMs')) this.recent.delete(k);
+        }
+        // Confidence: alias +40, weapon +35, combat phrase +15, related recent message +10.
+        score(parts) {
+            return (parts.alias ? 40 : 0) + (parts.weapon ? 35 : 0) + (parts.phrase ? 15 : 0) + (parts.related ? 10 : 0);
+        }
+        handle(msg) {
+            const t = msg.t != null ? msg.t : this.state.now();
+            const text = msg.text || '';
+            const sender = msg.sender || '?';
+            const mine = !!msg.mine;
+            const related = this.buffer.items.some(m => m.sender === sender && t - m.t <= 10000);
+            this.buffer.add({ t, sender, text });
+            const events = parseMessage(text);
+            const rec = { t, sender, text, events: events.map(e => e.type), score: 0, accepted: false };
+            this.last.push(rec);
+            if (this.last.length > 15) this.last.shift();
+            const att = String(sender).toLowerCase();
+            for (const ev of events) {
+                if (mine || ev.type === 'LOST_LOCK' || ev.type === 'HIT' || ev.type === 'MISS' || ev.type === 'COUNTER') {
+                    this.state.apply(ev, sender, t, mine);
+                    continue;
+                }
+                if ((ev.type === 'LAUNCH' || ev.type === 'GUNS') && !ev.target) {
+                    const f = this.aliases.findIn(text);
+                    if (f) ev.target = f;
+                }
+                const lock = ev.type === 'LAUNCH' ? this.state.findLock(att, t) : null;
+                const named = !!ev.target;
+                const targetsMe = named && this.aliases.isUser(ev.target);
+                if (named && !targetsMe) continue;
+                const parts = {
+                    alias: targetsMe || (!named && !!lock),
+                    weapon: ev.type === 'GUNS' || (ev.cls && ev.cls !== 'unknown') || !!(lock && lock.cls !== 'unknown'),
+                    phrase: true,
+                    related
+                };
+                rec.score = Math.max(rec.score, this.score(parts));
+                if (rec.score < this.s.get('confidenceMin')) continue;
+                if (ev.type === 'GUNS' || (ev.type === 'LAUNCH' && !lock)) {
+                    const key = ev.type + '|' + (ev.cls || 'gun');
+                    const prev = this.recent.get(key);
+                    if (prev != null && t - prev < this.s.get('dedupeMs')) continue;
+                    this.recent.set(key, t);
+                }
+                rec.accepted = true;
+                this.state.apply(ev, sender, t, false);
+            }
+            return events;
+        }
+    }
+
     // ---------- ChatMonitor ----------
     class ChatMonitor {
-        constructor(settings, aliases, engine, audio, hud) {
-            this.s = settings; this.aliases = aliases; this.engine = engine; this.audio = audio; this.hud = hud;
+        constructor(ctx) {
+            Object.assign(this, ctx); // settings, aliases, state, detector, audio, hud, ui
             this.seen = new Map(); this.queue = []; this.timer = null;
-            this.sentReplies = []; this.started = false;
-            engine.on('reply', (text) => this.send(text));
-            engine.on('change', () => this.hud.render());
-            engine.on('event', (type, e) => {
+            this.sentReplies = []; this.started = false; this.startedAt = Date.now();
+            this.failWarned = false; this.wizardShown = false;
+            this.state.on('reply', (text) => this.send(text));
+            this.state.on('change', () => this.hud.render());
+            this.state.on('event', (type, e) => {
                 if (type === 'LOCK') this.audio.play('lock');
                 else if (type === 'LAUNCH') this.audio.play(e.cls === 'gun' ? 'gun' : e.cls === 'radar' ? 'radar' : 'ir');
             });
         }
-        ownCallsign() {
-            try { const u = window.geofs && geofs.userRecord; return u ? (u.callsign || u.name || '') : ''; } catch (e) { return ''; }
-        }
-        syncAliases() {
-            const own = this.ownCallsign();
-            const list = this.s.get('aliases').slice();
-            if (own) list.push(own);
-            this.aliases.set(list);
-        }
         send(text) {
-            this.sentReplies.push({ n: normalize(text), t: Date.now() });
+            const now = Date.now();
+            const cd = this.s.get('cooldowns') || {};
+            if (now - (cd.lastReply || 0) < this.s.get('replyCooldownMs')) return;
+            this.s.set('cooldowns', Object.assign({}, cd, { lastReply: now }));
+            this.sentReplies.push({ n: normalize(text), t: now });
             try { if (window.chat && typeof chat.sendMessage === 'function') chat.sendMessage(text); } catch (e) { /* ignore */ }
         }
         _isEcho(text) {
@@ -463,22 +676,24 @@
             if (i >= 0) { this.sentReplies.splice(i, 1); return true; }
             return false;
         }
-        _isOwnSender(sender) {
-            const own = this.ownCallsign();
-            return !!own && normalize(own) === normalize(sender);
+        _isOwn(m) {
+            const myId = this.aliases.identity.info.myId;
+            if (myId && m.id != null && String(m.id) === myId) return true;
+            const s = canon(m.sender);
+            return !!s && this.aliases.ownNames().some(n => canon(n) === s);
         }
         ingest(list) {
             if (!Array.isArray(list)) return;
             for (const m of list) {
                 if (!m || !m.msg) continue;
-                let text = m.msg;
+                let text;
                 try { text = decodeURIComponent(String(m.msg).replace(/\+/g, ' ')); } catch (e) { text = String(m.msg); }
                 const sender = m.cs || m.callsign || m.name || m.acid || m.id || '?';
                 const key = [m.id, m.ts, sender, text].join('|');
                 if (this.seen.has(key)) continue;
                 this.seen.set(key, 1);
                 if (this.seen.size > 500) this.seen.delete(this.seen.keys().next().value);
-                this.queue.push({ sender: String(sender), text, t: Date.now() });
+                this.queue.push({ id: m.id, sender: String(sender), text, t: Date.now() });
                 if (this.queue.length > 500) this.queue.shift();
             }
             if (!this.timer) this.timer = setTimeout(() => this._flush(), 40);
@@ -489,19 +704,27 @@
             const start = Date.now();
             while (this.queue.length) {
                 const m = this.queue.shift();
-                const mine = this._isOwnSender(m.sender);
+                const mine = this._isOwn(m);
                 if (mine && this._isEcho(m.text)) continue;
-                this.engine.process({ sender: m.sender, text: m.text, t: m.t, mine });
+                this.detector.handle({ sender: m.sender, text: m.text, t: m.t, mine });
                 if (Date.now() - start > 6) break;
             }
             if (this.queue.length) this.timer = setTimeout(() => this._flush(), 20);
         }
-        start() {
-            if (this.started) return; this.started = true;
-            this.syncAliases();
-            this.s.onChange((k) => { if (k === 'aliases') this.syncAliases(); });
-            const orig = window.fetch;
+        checkIdentity() {
+            const r = this.aliases.refresh();
+            if (r.changed) this.hud.notify('CALLSIGN UPDATED: ' + r.callsign, 'green', 4000);
+            if (r.status === 'FAILED') {
+                if (!this.failWarned) { this.failWarned = true; this.hud.notify('\u26A0 GeoFS Identity Detection Failed', 'orange', 6000); }
+                if (!this.aliases.active.length && !this.wizardShown && !this.s.get('wizardDone') && Date.now() - this.startedAt > 8000) {
+                    this.wizardShown = true;
+                    if (this.ui && this.ui.showWizard) this.ui.showWizard();
+                }
+            } else this.failWarned = false;
+        }
+        _hook() {
             const self = this;
+            const orig = window.fetch;
             if (typeof orig === 'function') {
                 window.fetch = function (input) {
                     const p = orig.apply(this, arguments);
@@ -514,53 +737,183 @@
                     return p;
                 };
             }
-            this.tickTimer = setInterval(() => { if (this.s.get('enabled')) { this.syncAliases(); this.engine.tick(); } }, 250);
+            // GeoFS multiplayer may also use XMLHttpRequest
+            const XHR = window.XMLHttpRequest;
+            if (XHR && XHR.prototype) {
+                const open = XHR.prototype.open;
+                XHR.prototype.open = function (method, url) {
+                    try {
+                        if (String(url).indexOf('mps.geo-fs.com/update') >= 0) {
+                            this.addEventListener('load', function () {
+                                try { const d = JSON.parse(this.responseText); if (d && d.chatMessages) self.ingest(d.chatMessages); } catch (e) { /* ignore */ }
+                            });
+                        }
+                    } catch (e) { /* ignore */ }
+                    return open.apply(this, arguments);
+                };
+            }
+        }
+        start() {
+            if (this.started) return; this.started = true;
+            this.checkIdentity();
+            this.s.onChange((k) => { if (k === 'customAliases' || k === 'disabledDetected') this.aliases.rebuild(); });
+            this._hook();
+            let n = 0;
+            this.tickTimer = setInterval(() => {
+                if (!this.s.get('enabled')) return;
+                if (++n % 4 === 0) this.checkIdentity();
+                this.detector.tick();
+            }, 250);
         }
     }
 
-    // ---------- UI ----------
-    function buildUI(settings, hud) {
-        if (typeof document === 'undefined' || !document.body) return;
+    // ---------- UI: settings panel, debug panel, wizard ----------
+    function buildUI(ctx) {
+        if (typeof document === 'undefined' || !document.body) return {};
+        const { settings, aliases, state, detector, hud } = ctx;
+        const st = document.createElement('style');
+        st.textContent =
+            '#gdai-panel{display:none;position:fixed;bottom:44px;left:10px;width:300px;max-height:80vh;overflow:auto;background:#1e1e1e;color:#eee;padding:10px;border-radius:8px;z-index:100000;font:12px Arial,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.6)}' +
+            '#gdai-panel h4{margin:8px 0 4px;font-size:12px;color:#f5c400}#gdai-panel label{display:block;margin:2px 0}' +
+            '#gdai-panel input[type=text]{background:#333;color:#eee;border:1px solid #555;padding:2px 4px;width:170px}' +
+            '#gdai-panel button,.gdai-btn{background:#444;color:#fff;border:1px solid #666;border-radius:4px;padding:2px 8px;margin:2px;cursor:pointer}' +
+            '#gdai-panel pre{white-space:pre-wrap;font:11px monospace;background:#111;padding:6px;margin:4px 0;max-height:220px;overflow:auto}' +
+            '#gdai-wizard{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100001;display:flex;align-items:center;justify-content:center;font:13px Arial,sans-serif}' +
+            '#gdai-wizard div{background:#222;color:#eee;padding:18px;border-radius:8px;width:320px}#gdai-wizard input{width:100%;box-sizing:border-box;margin:4px 0 10px;padding:4px}';
+        document.head.appendChild(st);
+
         const wrap = document.createElement('div');
-        wrap.style.cssText = 'position:fixed;bottom:10px;left:10px;z-index:99999;font:12px Arial,sans-serif;display:flex;gap:4px';
-        const btn = document.createElement('button');
+        wrap.style.cssText = 'position:fixed;bottom:10px;left:10px;z-index:100000;display:flex;gap:4px;font:12px Arial,sans-serif';
+        const btn = document.createElement('button'); btn.className = 'gdai-btn';
         const paint = () => { btn.textContent = 'Defense AI: ' + (settings.get('enabled') ? 'ON' : 'OFF'); };
-        btn.onclick = () => { settings.set('enabled', !settings.get('enabled')); if (!settings.get('enabled')) hud.clear(); paint(); };
+        btn.onclick = () => { settings.set('enabled', !settings.get('enabled')); if (!settings.get('enabled')) hud.clear(); paint(); sync(); };
         paint();
-        const gear = document.createElement('button'); gear.textContent = '\u2699';
-        const panel = document.createElement('div');
-        panel.style.cssText = 'display:none;position:fixed;bottom:44px;left:10px;background:#222;color:#eee;padding:10px;border-radius:6px;z-index:99999;width:240px';
-        [['autoChat', 'Auto chat replies'], ['hud', 'HUD banners'], ['audio', 'Audio warnings']].forEach(([k, label]) => {
-            const l = document.createElement('label'); l.style.display = 'block';
-            const c = document.createElement('input'); c.type = 'checkbox'; c.checked = !!settings.get(k);
-            c.onchange = () => settings.set(k, c.checked);
-            l.appendChild(c); l.appendChild(document.createTextNode(' ' + label)); panel.appendChild(l);
-        });
-        const ta = document.createElement('textarea');
-        ta.rows = 4; ta.style.cssText = 'width:100%;margin-top:6px'; ta.value = settings.get('aliases').join('\n');
-        ta.onchange = () => settings.set('aliases', ta.value.split('\n').map(s => s.trim()).filter(Boolean));
-        const cap = document.createElement('div'); cap.textContent = 'My aliases (one per line)';
-        panel.appendChild(cap); panel.appendChild(ta);
-        gear.onclick = () => { panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; };
+        const gear = document.createElement('button'); gear.className = 'gdai-btn'; gear.textContent = '\u2699';
         wrap.appendChild(btn); wrap.appendChild(gear);
+
+        const panel = document.createElement('div'); panel.id = 'gdai-panel';
+        const toggle = () => { panel.style.display = panel.style.display === 'block' ? 'none' : 'block'; if (panel.style.display === 'block') sync(); };
+        gear.onclick = toggle;
+        document.addEventListener('keydown', (e) => { if (e.altKey && e.code === 'KeyD') { e.preventDefault(); toggle(); } });
+
+        const mk = (tag, text, parent) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (parent) parent.appendChild(el); return el; };
+        mk('b', 'GeoFS Defensive AI v4.0', panel);
+        const checks = [];
+        [['enabled', 'Enable addon'], ['autoChat', 'Auto chat replies'], ['hud', 'HUD banners'], ['sounds', 'Sounds']].forEach(([k, label]) => {
+            const l = mk('label', null, panel); const c = mk('input', null, l); c.type = 'checkbox';
+            c.onchange = () => { settings.set(k, c.checked); if (k === 'enabled') paint(); if (k === 'hud' && !c.checked) hud.clear(); };
+            l.appendChild(document.createTextNode(' ' + label)); checks.push([k, c]);
+        });
+        mk('h4', 'Detected Aliases', panel);
+        const detBox = mk('div', null, panel);
+        mk('h4', 'Custom Aliases', panel);
+        const rowsBox = mk('div', null, panel);
+        const actions = mk('div', null, panel);
+        const rows = [];
+        const addRow = (val) => {
+            const r = mk('div', null, rowsBox); const i = mk('input', null, r); i.type = 'text'; i.value = val || '';
+            const rm = mk('button', 'Remove', r);
+            const rec = { r, i }; rows.push(rec);
+            rm.onclick = () => { rowsBox.removeChild(r); rows.splice(rows.indexOf(rec), 1); save(); };
+            return i;
+        };
+        const save = () => {
+            settings.set('customAliases', rows.map(x => x.i.value.trim()).filter(Boolean));
+            aliases.rebuild(); sync(true);
+        };
+        const bAdd = mk('button', 'Add', actions); bAdd.onclick = () => addRow('').focus();
+        const bImp = mk('button', 'Import', actions);
+        const bSave = mk('button', 'Save', actions); bSave.onclick = save;
+        const impBox = mk('div', null, panel); impBox.style.display = 'none';
+        const ta = mk('textarea', null, impBox); ta.rows = 3; ta.style.cssText = 'width:100%;box-sizing:border-box'; ta.placeholder = 'One per line, comma separated, or JSON array';
+        const bApply = mk('button', 'Apply import', impBox);
+        bImp.onclick = () => { impBox.style.display = impBox.style.display === 'none' ? 'block' : 'none'; };
+        bApply.onclick = () => {
+            let list = [];
+            try { const j = JSON.parse(ta.value); if (Array.isArray(j)) list = j.map(String); } catch (e) { list = ta.value.split(/[\n,;]+/); }
+            list.map(s => s.trim()).filter(Boolean).forEach(s => addRow(s));
+            ta.value = ''; impBox.style.display = 'none'; save();
+        };
+        const bDbg = mk('button', 'Debug panel', panel);
+        const dbg = mk('pre', '', panel); dbg.style.display = 'none';
+        bDbg.onclick = () => { dbg.style.display = dbg.style.display === 'none' ? 'block' : 'none'; sync(); };
+
+        function debugText() {
+            const i = aliases.identity.info;
+            const top = state.engagements.filter(e => e.phase === 'LOCKED' || e.phase === 'LAUNCHED')[0];
+            const L = [];
+            L.push('Detection status: ' + aliases.status);
+            L.push('Detected callsign: ' + (i.callsign || '-'));
+            L.push('Detected username: ' + (i.username || '-'));
+            L.push('Detected aliases: ' + (aliases.detected.join(', ') || '-'));
+            L.push('Custom aliases: ' + (aliases.custom.join(', ') || '-'));
+            L.push('Active aliases: ' + (aliases.active.join(', ') || '-'));
+            L.push('Threat state: ' + (top ? top.phase + ' ' + (top.weapon || '?') + ' (' + top.attackerName + ')' : 'NONE'));
+            L.push('Threat buffer:');
+            state.engagements.slice(-6).forEach(e => L.push('  #' + e.id + ' ' + e.attackerName + ' ' + (e.weapon || '?') + ' ' + e.phase));
+            L.push('Last messages:');
+            detector.last.slice(-8).forEach(m => L.push('  ' + m.sender + ': ' + m.text + ' [' + (m.events.join(',') || '-') + ' ' + m.score + (m.accepted ? ' OK' : '') + ']'));
+            return L.join('\n');
+        }
+        function sync(keepRows) {
+            checks.forEach(([k, c]) => { c.checked = !!settings.get(k); });
+            detBox.textContent = '';
+            const off = new Set((settings.get('disabledDetected') || []).map(canon));
+            if (!aliases.detected.length) mk('div', aliases.stored.length ? '(none detected; using stored: ' + aliases.stored.join(', ') + ')' : '(none detected)', detBox);
+            aliases.detected.forEach(a => {
+                const l = mk('label', null, detBox); const c = mk('input', null, l); c.type = 'checkbox'; c.checked = !off.has(canon(a));
+                c.onchange = () => {
+                    const cur = new Set((settings.get('disabledDetected') || []).map(canon));
+                    if (c.checked) cur.delete(canon(a)); else cur.add(canon(a));
+                    settings.set('disabledDetected', Array.from(cur)); aliases.rebuild();
+                };
+                l.appendChild(document.createTextNode(' ' + a));
+            });
+            if (!keepRows) { rowsBox.textContent = ''; rows.length = 0; aliases.custom.forEach(a => addRow(a)); }
+            if (dbg.style.display !== 'none') dbg.textContent = debugText();
+        }
+        setInterval(() => { if (panel.style.display === 'block' && dbg.style.display !== 'none') dbg.textContent = debugText(); }, 500);
+
+        function showWizard() {
+            if (document.getElementById('gdai-wizard')) return;
+            const ov = mk('div', null, document.body); ov.id = 'gdai-wizard';
+            const box = mk('div', null, ov);
+            mk('b', 'GeoFS Defensive AI - Setup', box);
+            mk('p', 'Identity could not be detected automatically.', box);
+            mk('div', 'Enter Callsign:', box); const c1 = mk('input', null, box); c1.type = 'text';
+            mk('div', 'Enter Additional Aliases (comma separated):', box); const c2 = mk('input', null, box); c2.type = 'text';
+            const ok = mk('button', 'Save', box); ok.className = 'gdai-btn';
+            const skip = mk('button', 'Skip', box); skip.className = 'gdai-btn';
+            ok.onclick = () => {
+                const list = [c1.value].concat(c2.value.split(/[,;\n]+/)).map(s => s.trim()).filter(Boolean);
+                if (list.length) settings.set('customAliases', (settings.get('customAliases') || []).concat(list));
+                settings.set('wizardDone', true); aliases.rebuild(); document.body.removeChild(ov); sync();
+            };
+            skip.onclick = () => { document.body.removeChild(ov); };
+        }
+
         document.body.appendChild(wrap); document.body.appendChild(panel);
+        sync();
+        return { showWizard, toggle, sync };
     }
 
     // ---------- bootstrap ----------
-    const api = { SettingsManager, AliasManager, MessageBuffer, CombatEngine, HUDManager, AudioManager, ChatMonitor, parseMessage, normalize, canon };
+    const api = { SettingsManager, IdentityDetector, AliasManager, MessageBuffer, ThreatDetector, ThreatStateManager, HUDManager, AudioManager, ChatMonitor, parseMessage, normalize, canon };
     function init() {
         const settings = new SettingsManager();
-        const aliases = new AliasManager(settings.get('aliases'));
-        const engine = new CombatEngine(settings, aliases);
-        const hud = new HUDManager(settings, engine);
+        const aliases = new AliasManager(settings, new IdentityDetector());
+        const state = new ThreatStateManager(settings, aliases);
+        const detector = new ThreatDetector(settings, aliases, state);
+        const hud = new HUDManager(settings, state);
         const audio = new AudioManager(settings);
-        const monitor = new ChatMonitor(settings, aliases, engine, audio, hud);
-        api.instance = { settings, aliases, engine, hud, audio, monitor };
+        const ctx = { settings, aliases, state, detector, audio, hud, ui: null };
+        const monitor = new ChatMonitor(ctx);
+        api.instance = Object.assign(ctx, { monitor });
         return api.instance;
     }
     window.__GeoFSDefenseAI = api;
     if (!window.__GeoFSDefenseAI_NOAUTO) {
-        const go = () => { const i = init(); buildUI(i.settings, i.hud); i.monitor.start(); };
+        const go = () => { const i = init(); i.ui = buildUI(i); i.monitor.ui = i.ui; i.monitor.start(); };
         if (document.body) go(); else document.addEventListener('DOMContentLoaded', go);
     }
 })();
