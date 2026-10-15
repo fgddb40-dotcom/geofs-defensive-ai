@@ -1,0 +1,23 @@
+PL-1|China|Luoyang / 612 Institute|S|PL1,PL-1A,PL-1B,Pen Lai 1,Pi Li 1,PiLi-1,PL-1 SARH,China AA-1,Chinese Alkali,Chinese Beam Rider
+PL-2|China|Luoyang|I|PL2,PL-2A,PL-2B,Pen Lai 2,Pi Li 2,Chinese Atoll,Chinese AA-2,PL-2 Atoll,China Atoll,Type 2 AAM
+PL-3|China|Luoyang|I|PL3,Pi Li 3,Pen Lai 3,PL-3 Atoll,Chinese Atoll improved
+PL-4|China|Luoyang|S|PL4,Pi Li 4,Pen Lai 4,PL-4 SARH
+PL-5|China|Luoyang|I|PL5,PL-5B,PL-5C,PL-5E,PL-5EII,PL-5E-II,PL-5E2,PL-5C-II,PL-5 Atoll,Pi Li 5,PL5E,PL5B,PL5C,PL5EII,Chinese Sidewinder,Chinese Sidewinder PL-5
+PL-7|China|Luoyang|I|PL7,Pi Li 7,Chinese Magic,PL-7 Magic,PL-7 R.550,PL-7 Matra
+PL-8|China|Luoyang|I|PL8,PL-8H,PL-8B,PL-8A,Python 3 China,Chinese Python,Chinese Python 3,Pi Li 8,PL8H,Python-3 Chinese,Python 3 license
+PL-9|China|Luoyang|I|PL9,PL-9C,PL-9L,PL-9B,PL-9 Tianjian,PL-9 Kunlun,Pi Li 9,PL9C,TY-90,TY90,Tianyan 90,TY-90 missile,Pi Li 9C,Chinese Aphid
+PL-10|China|Luoyang|I|PL10,PL-10E,PL-10A,PL-10B,PL-10 ASR,PL-10E ASR,PL-10 Airwolf,PL-10 Heat seeker,PL-10 Pi Li 10,PL10E,PL-10 Shortrange
+PL-11|China|Luoyang|S|PL11,PL-11A,PL-11B,PL-11C,PL-11 Aspide,Chinese Aspide,PL-11 AMR,PL-11 Sparrow,Pi Li 11,PL11,PL11A,PL-11E,FD-60,FD60,FD-60 missile,FD-60 AAM
+PL-12|China|Luoyang|A|PL12,PL-12A,PL-12B,PL-12C,PL-12D,PL-12E,PL-12 SD-10,PL-12 Pi Li 12,Chinese AMRAAM,PL12,PL12A,PL12C,PL12D,PL-12 AMRAAM,PL-12 Fox 3,PL-12 ARH,PL12E,PL-12D ramjet,PL-12E Active,Pi Li 12,Pi-Li-12,Pili 12
+PL-13|China|Luoyang|A|PL13,PL-13 AAM,PL-13 Ramjet,PL-13 Long range,Pi Li 13
+PL-14|China|Luoyang|A|PL14,PL-14 AAM,PL-14 Ramjet,Pi Li 14
+PL-15|China|Luoyang|A|PL15,PL-15E,PL-15 E,PL-15A,PL-15B,PL15E,PL-15 Pi Li 15,PL-15 AAM,Chinese Meteor,Pili 15,Pi Li 15,PL-15 Export,PL-15E Export,Chinese AIM-120,Chinese AMRAAM killer,PL-15 AESA,PL15 AESA,Pi Li 15 Fox 3,Dual pulse PL-15
+PL-16|China|Luoyang|A|PL16,PL-16 AAM,Pi Li 16,PL-16 ramjet,PL-16 export
+PL-17|China|Luoyang|A|PL17,PL-17 AAM,Pi Li 17,PL-17 AWACS killer,PL-17 long range,PL-17 AAM-L,Chinese AWACS killer,PL17 AWACS,PL-17 hypersonic,PL-17 J-20 missile,Pi Li 17,Pi Li 17 AWACS Killer,J-20 AWACS killer,PL-XX
+PL-18|China|Luoyang|A|PL18,PL-18 AAM,PL-18 Pi Li 18,PL-18 long range
+PL-19|China|Luoyang|A|PL19,PL-19 AAM,PL-19 Pi Li 19,PL-19 AWACS
+PL-20|China|Luoyang|A|PL20,PL-20 AAM,PL-20 Pi Li 20,PL-20 ramjet,PL-20 AWACS killer,PL-20 Fox 3,Pi Li 20
+PL-21|China|Luoyang|A|PL21,PL-21 AAM,PL-21 Pi Li 21,PL-21 AESA,PL-21 ramjet
+SD-10|China|Luoyang|A|SD10,SD-10A,SD-10B,SD-10 Export,SD-10A Export,SD-10 Pakistan,SD-10 JF-17,SD-10 Fox 3,SD10A,SD10B,SD-10 Pilibi,PL-12 export,PL-12E export,PL-12 Export,JF-17 AMRAAM,JF-17 missile,Pakistan Fox 3,SD-10A Pakistan
+TY-90|China|Hongdu|I|TY90,Tian Yan 90,Tianyan 90,Helicopter air to air missile,PL-9 helicopter variant,TY-90 helicopter
+TianJian-1|China|Luoyang|I|TJ-1,Tian Jian 1,Tianjian,Tian Jian,TY-1
