@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, 'counteruser.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, 'geofs-defensive-ai.user.js'), 'utf8');
 
 function setup(options = {}) {
     const sent = [];

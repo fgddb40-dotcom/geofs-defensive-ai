@@ -1,0 +1,21 @@
+K-5|Soviet Union|OKB-2 Raduga|S|RS-1U,RS-2U,RS-2US,AA-1,AA-1 Alkali,Alkali,K5,K-5M,K-5MS,RS-1,RS-2,RS-2-U,Izdeliye 51
+K-8|Soviet Union|OKB-2 Raduga|M|K8,K-8M,K-8MS,K-8M1,K-8MR,R-8,R-8M,R-8MR,R-8MT,AA-3,AA-3 Anab,Anab,Anab SARH,Anab IR,K-8 Anab,R8,R-8M1
+K-13|Soviet Union|Vympel / Molniya|I|K13,R-3,R3,R-3S,R3S,R-3R,R3R,R-3M,R-13,R13,R-13M,R-13M1,K-13A,K-13M,AA-2,AA-2 Atoll,Atoll,AA2,AA-2D Advanced Atoll,Advanced Atoll,Atoll missile,RS-2US,Vympel K-13,R-13S,R-13R,K-13R,K-13T,TGS-13,PL-2,AAM-1 Atoll
+K-55|Soviet Union|Vympel|A|K55,K-55 missile,R-55,R55,R-55M,R-55 Vympel,RS-82,AA-1 variant K-55
+K-60|Soviet Union|Vympel|I|K60,K-60 missile,R-60 predecessor,K-60 Vympel
+K-74|Soviet Union|Vympel|I|K74,K-74 missile,R-74,R74,K-74M,K-74 Vympel,R-73 development
+K-77|Soviet Union|Vympel|A|K77,K-77M,K-77 missile,R-77 development,Izdeliye 170
+R-3|Soviet Union|Vympel|I|R3,R-3S,R3S,R-3R,AA-2,AA-2 Atoll,Atoll,K-13,K13,Advanced Atoll,AA-2D
+R-13|Soviet Union|Vympel|I|R13,R-13M,R-13M1,R-13S,R-13R,AA-2,AA-2 Atoll,Atoll,AA-2-2 Advanced Atoll,AA-2D
+R-23|Soviet Union|Vympel|M|R23,R-23R,R-23T,R-23M,R-23MR,R-23MT,R-24,R24,R-24R,R-24T,AA-7,AA-7 Apex,Apex,AA7,AA-7 Apex SARH,AA-7 Apex IR,Apex missile,Izdeliye 340,Izdeliye 340R,Izdeliye 340T,R23R,R23T,R24R,R24T,Mig-23 missile,Mig-23 Apex
+R-24|Soviet Union|Vympel|M|R24,R-24R,R-24T,R-24 Apex,R-23M,R-23 Apex,AA-7,AA-7 Apex,Apex,Izdeliye 340M,R24R,R24T
+R-27|Soviet Union|Vympel|M|R27,R-27R,R-27T,R-27ER,R-27ET,R-27RE,R-27TE,R-27EA,R-27EM,R-27P,R-27AE,R-27EP,R-27ER1,R-27ET1,R-27R1,R-27T1,R-27RE1,R-27TE1,R-27EA1,AA-10,AA-10 Alamo,Alamo,Alamo A,Alamo B,Alamo C,Alamo D,Alamo E,Alamo F,AA-10 Alamo A,AA-10 Alamo B,AA-10 Alamo C,AA-10 Alamo D,AA-10A,AA-10B,AA-10C,AA-10D,AA-10E,AA-10F,AA10,Alamo missile,27R,27T,27ER,27ET,Izdeliye 470,Izdeliye 471,R-27 Alamo,R27ER,R27ET,R27R,R27T,Vympel R-27,Alamo ER
+R-33|Soviet Union|Vympel|S|R33,R-33S,R33S,AA-9,AA-9 Amos,Amos,AA9,Amos missile,Mig-31 missile,Izdeliye 640,R-33 Amos,Foxhound missile
+R-37|Russia|Vympel|A|R37,R-37M,R37M,RVV-BD,RVV BD,RVV-BD Vympel,K-37,K37,K-37M,K-37M2,Izdeliye 610,Izdeliye 610M,AA-13,AA-13 Axehead,Axehead,AA13,Arrow,R-37M Axehead,Mig-31BM missile,Mig-31 missile R-37,Vympel R-37,R-37M Missile,Long range R-37,RVV-BD Axehead,Su-57 R-37M,R-37 Arrow
+R-40|Soviet Union|Vympel / Molniya|M|R40,R-40R,R-40T,R-40RD,R-40TD,R-40D,R-40RD1,R-40TD1,R-46,R-46T,R46,AA-6,AA-6 Acrid,Acrid,AA6,Acrid missile,Mig-25 missile,Foxbat missile,Izdeliye 46,Izdeliye 46T,Acrid A,Acrid B,R-40 Acrid,R-40TD-1
+R-60|Soviet Union|Vympel|I|R60,R-60M,R60M,R-60MK,R-60MK,R-60MK,R-60MK,AA-8,AA-8 Aphid,Aphid,AA8,Aphid missile,Aphid A,Aphid B,R-60 Aphid,R-60MK Aphid,K-60,Izdeliye 62,Vympel R-60,R-60 AA-8,R-60M AA-8,Aphid R-60,Small Vympel
+R-73|Russia|Vympel|I|R73,R-73E,R73E,R-73M,R73M,R-73M1,R-73M2,R-73EM,R-73L,R-73A,R-73RDM2,R-73RDM,RVV-MD,RVV MD,RVV-MD2,RVV-MD Vympel,AA-11,AA-11 Archer,Archer,AA11,Archer missile,Archer R-73,Izdeliye 72,Izdeliye 740,Vympel R-73,R-73 Archer,Archer AA-11,R-74,R74,R-74M,R-74M2,R-74M2 Archer,R-74ME,R-74E,Helmet missile,Mig-29 missile,Su-27 missile,Vympel archer,R-74 AA-11,Archer E,R-73 Archer E,Archer RDM2
+R-77|Russia|Vympel|A|R77,R-77-1,R-77-PD,R-77M,R-77M1,R-77-1 RVV-SD,R-77T,R-77PD,R-77 Adder,RVV-AE,RVV AE,RVV-SD,RVV SD,RVV-AE-PD,RVV-AE Vympel,RVV-SD Vympel,AA-12,AA-12 Adder,Adder,AA12,Adder missile,Izdeliye 170,Izdeliye 170-1,Izdeliye 180,K-77,K77,K-77M,R-77 RVV-AE,Vympel R-77,Amraamski,Amraamski R-77,Russian AMRAAM,Russian Amraam,AA-12A Adder,AA-12B Adder,R-77 Adder AA-12,R-77M Adder,R-77ME,R-77M-PD,RVV-AE-D,R-77-PD Adder,R-77 PD,Adder R-77,Adder AA12,Adder RVV-AE
+R-98|Soviet Union|Vympel|M|R98,R-98M,R-98MR,R-98MT,R-98M1,R-98 Izdeliye 340,R-98 missile,Mig-23 R-98,R-98 Apex,R-98R,R-98T,AA-7 R-98,R-23 improved,R-98MR Apex,R-98MT Apex
+R-172|Russia|Vympel|A|R172,R-172 missile,KS-172,KS172,K-172,K172,KS-172 AAM-L,KS-172 AAM,AAM-L,AAM L,Izdeliye 172,Izdeliye 172 AAM-L,AAM-L Novator,Novator KS-172,Novator R-172,Novator 172,KS-172 Novator,Long range 172,172,KS-172 Novator AAM-L,Slow Flanker missile,R-172 Novator,KS-172 AWACS killer,AWACS killer missile
+KS-172|Russia|Novator|A|KS172,K-172,K172,R-172,R172,AAM-L,AAM L,KS-172 AAM-L,Izdeliye 172,Novator KS-172,Novator AAM-L,Novator 172,172,KS-172 Novator,AWACS killer
