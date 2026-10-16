@@ -12,6 +12,7 @@ function setup(options = {}) {
     const errors = [];
     let now = Date.now();
     const intervals = [];
+    const intervalDelays = [];
     const chat = { sendMessage: text => sent.push(text) };
     const window = {
         __GeoFSDefenseAI_NOAUTO: true,
@@ -24,7 +25,7 @@ function setup(options = {}) {
         Date: class extends Date { static now() { return now; } },
         console: { error: (...args) => errors.push(args) },
         setTimeout: () => 1,
-        setInterval: callback => { intervals.push(callback); return intervals.length; },
+        setInterval: (callback, delay) => { intervals.push(callback); intervalDelays.push(delay); return intervals.length; },
         ...(options.document ? { document: options.document } : {})
     });
     if (options.geofs) window.geofs = options.geofs;
@@ -51,14 +52,14 @@ function setup(options = {}) {
     }
     return {
         api, window, originalFetch, settings, aliases, state, detector, monitor, sent, receive,
-        chat, notifications, errors, intervals,
+        chat, notifications, errors, intervals, intervalDelays,
         advance(ms) { now += ms; }
     };
 }
 
-test('starts the chat monitor and installs the network listener', () => {
+test('starts the chat monitor without changing the network API', () => {
     const h = setup();
-    assert.notEqual(h.window.fetch, h.originalFetch);
+    assert.equal(h.window.fetch, h.originalFetch);
     assert.equal(h.monitor.started, true);
     assert.ok(h.monitor.tickTimer);
 });
@@ -558,4 +559,353 @@ test('late chat API availability recovers without repeated failure notifications
     h.intervals[0]();
     assert.deepEqual(h.sent, ['flares']);
     assert.equal(h.state.engagements[0].phase, 'COUNTERED');
+});
+
+test('non-AIM9 missiles accept common lock and fire phrasing', () => {
+    for (const [lock, launch, reply] of [
+        ['lock on t9 with aa3', 'fire', 'flares chaffs'],
+        ['aa12 locked on t9', 'shoot', 'chaffs'],
+        ['locking aa11 onto t9', 'missile away', 'flares'],
+        ['locked r27et on t9', 'launch', 'flares'],
+        ['lock mica ir on t9', 'firing', 'flares']
+    ]) {
+        const h = setup();
+        h.receive(lock);
+        assert.equal(h.state.engagements[0]?.phase, 'LOCKED', lock);
+        h.receive(launch);
+        assert.deepEqual(h.sent, [reply], lock + ' -> ' + launch);
+    }
+});
+
+test('combined lock and launch messages send the correct countermeasure', () => {
+    for (const [message, reply] of [
+        ['lock aa3 on t9 away', 'flares chaffs'],
+        ['aa12 locked on t9 firing', 'chaffs'],
+        ['lock on t9 with iris-t and fire', 'flares']
+    ]) {
+        const h = setup();
+        h.receive(message);
+        assert.deepEqual(h.sent, [reply], message);
+    }
+});
+
+test('fire and shoot with an explicit missile and target work without a lock', () => {
+    for (const [message, reply] of [
+        ['fire aa12 at t9', 'chaffs'],
+        ['shoot mica ir on t9', 'flares'],
+        ['launching meteor at t9', 'chaffs']
+    ]) {
+        const h = setup();
+        h.receive(message);
+        assert.deepEqual(h.sent, [reply], message);
+    }
+});
+
+test('every database alias completes lock to launch to native countermeasure chat', () => {
+    const h = setup();
+    const records = JSON.parse(fs.readFileSync(path.join(__dirname, 'missiledb', 'master_missile_database.json'), 'utf8'));
+    const aliases = new Set(records.flatMap(record => [record.official_name, ...record.aliases]));
+    for (const alias of aliases) {
+        h.state.engagements.length = 0;
+        h.sent.length = 0;
+        h.window.multiplayer.chatMessage = '';
+        h.receive('lock ' + alias.toLowerCase() + ' on t9');
+        const threat = h.state.engagements[0];
+        assert.ok(threat, alias);
+        assert.equal(threat.phase, 'LOCKED', alias);
+        assert.deepEqual(h.sent, [], alias);
+        h.receive('away');
+        assert.deepEqual(h.sent, [expectedReplies[threat.cls]], alias);
+        assert.equal(h.window.multiplayer.chatMessage, expectedReplies[threat.cls], alias);
+        assert.equal(threat.phase, 'COUNTERED', alias);
+    }
+});
+
+test('chat prerequisites are reported and recover without claiming sends', () => {
+    for (const block of ['disabled chat', 'signed out']) {
+        const h = setup();
+        if (block === 'disabled chat') h.window.geofs.preferences = { chat: false };
+        if (block === 'signed out') h.window.geofs.userRecord.role = 0;
+        h.receive('lock aa12 on t9');
+        h.receive('away');
+        assert.deepEqual(h.sent, [], block);
+        assert.match(h.monitor.lastSendStatus, /Chat (?:blocked|waiting):/, block);
+        assert.equal(h.state.engagements[0].phase, 'LAUNCHED', block);
+        h.window.geofs.preferences = { chat: true };
+        h.window.geofs.userRecord.role = 1;
+        h.intervals[0]();
+        assert.deepEqual(h.sent, ['chaffs'], block);
+    }
+});
+
+test('multiplayer lifecycle flags do not block a working native chat API', () => {
+    for (const flags of [{ on: false }, { started: false }, { on: false, started: false }]) {
+        const h = setup();
+        Object.assign(h.window.multiplayer, flags);
+        assert.equal(h.monitor.chatBlocker(), '');
+        h.receive('lock aa12 on t9');
+        h.receive('away');
+        assert.deepEqual(h.sent, ['chaffs']);
+        assert.equal(h.window.multiplayer.chatMessage, 'chaffs');
+        assert.equal(h.state.engagements[0].phase, 'COUNTERED');
+        assert.match(h.monitor.lastSendStatus, /^Queued for GeoFS chat:/);
+        for (const [key, value] of Object.entries(flags)) assert.equal(h.window.multiplayer[key], value);
+    }
+});
+
+test('native API rejection is surfaced and is not a countered threat', () => {
+    const h = setup();
+    h.window.multiplayer.setChatMessage = () => false;
+    h.receive('lock aa12 on t9');
+    h.receive('away');
+    assert.deepEqual(h.sent, []);
+    assert.equal(h.state.engagements[0].phase, 'LAUNCHED');
+    assert.match(h.monitor.lastSendStatus, /did not accept/);
+    assert.equal(h.errors.length, 1);
+});
+
+test('rejected messages explain why detection did not trigger', () => {
+    const h = setup();
+    for (const [text, reason] of [
+        ['aa12 is a missile', /No combat phrase/],
+        ['lock aa12 on t8', /Target does not match/],
+        ['away', /No target or matching lock/],
+        ['lock xyz-missile on t9', /Missile alias not recognized/]
+    ]) {
+        h.receive(text);
+        assert.equal(h.detector.last.at(-1).accepted, false, text);
+        assert.match(h.detector.last.at(-1).reason, reason, text);
+    }
+    h.receive('aa12 away on t9', 't9');
+    assert.match(h.detector.last.at(-1).reason, /Own message/);
+    assert.deepEqual(h.sent, []);
+});
+
+test('matching callsign does not hide a different sender with explicit GeoFS IDs', () => {
+    const h = setup({ geofs: { userRecord: { id: 42, callsign: 't9' } } });
+    h.monitor.ingest([{ acid: 43, uid: 'enemy', cs: 't9', msg: 'fire%20aa12%20at%20t9', ts: 1 }]);
+    h.monitor._flush();
+    assert.deepEqual(h.sent, ['chaffs']);
+});
+
+test('settings test-chat button uses the native API and shows real queue status', () => {
+    const elements = [];
+    function element(tag) {
+        const el = {
+            tag, textContent: '', style: {}, children: [],
+            classList: { add() {}, remove() {} },
+            appendChild(child) { this.children.push(child); child.parentNode = this; },
+            addEventListener() {}
+        };
+        elements.push(el);
+        return el;
+    }
+    const document = {
+        head: element('head'), body: element('body'),
+        createElement: element,
+        createTextNode: text => ({ textContent: text }),
+        querySelector: () => null,
+        addEventListener() {}
+    };
+    const sent = [];
+    const window = {
+        geofs: { userRecord: { callsign: 'T9', role: 1 }, preferences: { chat: true } },
+        multiplayer: {
+            on: true, started: true, chatMessage: '',
+            setChatMessage(text) { this.chatMessage = text; sent.push(text); }
+        }
+    };
+    vm.runInNewContext(source, { window, document, setInterval: () => 1, setTimeout: () => 1 });
+    const button = elements.find(el => el.tag === 'button' && el.textContent === 'Send test chat: flares');
+    assert.ok(button);
+    const instance = window.__GeoFSDefenseAI.instance;
+    instance.ui.toggle();
+    button.onclick();
+    assert.deepEqual(sent, ['flares']);
+    assert.ok(elements.some(el => el.textContent === 'Queued for GeoFS chat: flares'));
+    window.geofs.preferences.chat = false;
+    button.onclick();
+    assert.equal(sent.length, 1);
+    assert.ok(elements.some(el => el.textContent === 'Chat blocked: enable GeoFS chat in its options'));
+});
+
+test('fresh native calls without message IDs or timestamps are not permanently deduplicated', () => {
+    const h = setup();
+    h.window.ui = { chat: { publish() {} } };
+    h.intervals[0]();
+    for (let i = 0; i < 2; i++) {
+        h.window.multiplayer.chatMessage = '';
+        for (const text of ['lock aa12 on t9', 'away']) {
+            const message = { cs: 'attacker', uid: 'enemy', msg: encodeURIComponent(text) };
+            h.window.ui.chat.publish(message);
+            h.monitor.ingest([message]);
+            h.monitor._flush();
+        }
+    }
+    assert.deepEqual(h.sent, ['chaffs', 'chaffs']);
+    assert.equal(h.state.engagements.length, 2);
+});
+
+test('requested gun and FOX-4 formats immediately reply evade for the player only', () => {
+    for (const phrase of [
+        'fox4 t9', 'fox 4 t9', 'FOX4 on t9', 'fox 4 away on t9',
+        'fox4 at t9', 'guns t9', 'guns guns guns t9', 'gun t9',
+        'guns on t9', 'guns guns guns on t9', 'gun at t9'
+    ]) {
+        const h = setup();
+        h.receive(phrase);
+        assert.deepEqual(h.sent, ['evade'], phrase);
+        assert.equal(h.state.engagements[0].cls, 'gun', phrase);
+        assert.equal(h.state.engagements[0].phase, 'COUNTERED', phrase);
+        const hud = h.api.HUDManager.describe(h.state.engagements[0], h.state);
+        assert.ok(hud.lines.includes('COUNTER: EVADE'), phrase);
+
+        const other = setup();
+        other.receive(phrase.replace('t9', 't8'));
+        assert.deepEqual(other.sent, [], phrase + ' other target');
+    }
+});
+
+test('bare FOX-4 uses the same sender lock and changes missile response to evade', () => {
+    for (const phrase of ['fox4', 'fox 4', 'fox4 away', 'fox 4 away']) {
+        const h = setup();
+        h.receive('lock aa12 on t9');
+        h.receive(phrase);
+        assert.deepEqual(h.sent, ['evade'], phrase);
+        const noLock = setup();
+        noLock.receive(phrase);
+        assert.deepEqual(noLock.sent, [], phrase + ' no target');
+    }
+});
+
+test('manual evade and legacy evading both counter gun threats', () => {
+    for (const counter of ['evade', 'evading']) {
+        const h = setup({ autoChat: false });
+        h.receive('guns guns guns t9');
+        assert.equal(h.state.engagements[0].phase, 'LAUNCHED');
+        h.receive(counter, 't9');
+        assert.equal(h.state.engagements[0].phase, 'COUNTERED', counter);
+        assert.deepEqual(h.sent, []);
+    }
+});
+
+test('defense maintenance and reply retry run on a one-second tick', () => {
+    const h = setup();
+    assert.deepEqual(h.intervalDelays, [1000]);
+    h.window.multiplayer.chatMessage = 'busy';
+    h.receive('guns t9');
+    assert.deepEqual(h.sent, []);
+    h.window.multiplayer.chatMessage = '';
+    h.advance(1000);
+    h.intervals[0]();
+    assert.deepEqual(h.sent, ['evade']);
+    assert.equal(h.state.engagements[0].phase, 'COUNTERED');
+});
+
+test('other addon chat wrappers do not cause repeated rewrapping or duplicate processing', () => {
+    const h = setup();
+    let published = 0;
+    h.window.ui = { chat: { publish() { published++; } } };
+    h.intervals[0]();
+    const defenseHook = h.window.ui.chat.publish;
+    const outerHook = function (message) { return defenseHook.call(this, message); };
+    h.window.ui.chat.publish = outerHook;
+    for (let i = 0; i < 100; i++) h.intervals[0]();
+    assert.equal(h.window.ui.chat.publish, outerHook);
+    h.window.ui.chat.publish({ cs: 'enemy', msg: 'aa12%20away%20on%20t9' });
+    h.monitor._flush();
+    assert.equal(published, 1);
+    assert.equal(h.detector.last.length, 1);
+    assert.deepEqual(h.sent, ['chaffs']);
+});
+
+test('maintenance never sends network requests, reconnects, or changes MPS timing', () => {
+    const h = setup();
+    let networkCalls = 0;
+    const forbidden = () => { networkCalls++; throw new Error('Unexpected network activity'); };
+    const fetch = h.window.fetch = forbidden;
+    const open = forbidden;
+    h.window.XMLHttpRequest = function () {};
+    h.window.XMLHttpRequest.prototype.open = open;
+    Object.assign(h.window.multiplayer, {
+        sendUpdate: forbidden, init: forbidden, start: forbidden,
+        minUpdateDelay: 500, nextUpdateTime: 12345
+    });
+    h.window.ui = { chat: { publish() {} } };
+    for (let i = 0; i < 120; i++) {
+        h.advance(1000);
+        h.intervals[0]();
+    }
+    assert.equal(networkCalls, 0);
+    assert.equal(h.window.fetch, fetch);
+    assert.equal(h.window.XMLHttpRequest.prototype.open, open);
+    assert.equal(h.window.multiplayer.minUpdateDelay, 500);
+    assert.equal(h.window.multiplayer.nextUpdateTime, 12345);
+    assert.deepEqual(h.sent, []);
+});
+
+test('duplicate userscript execution preserves the existing instance and installs no timers', () => {
+    const h = setup();
+    const originalApi = h.window.__GeoFSDefenseAI;
+    originalApi.instance = { monitor: h.monitor };
+    let timers = 0;
+    vm.runInNewContext(source, {
+        window: h.window,
+        setInterval() { timers++; },
+        setTimeout() { timers++; }
+    });
+    assert.equal(h.window.__GeoFSDefenseAI, originalApi);
+    assert.equal(h.window.__GeoFSDefenseAI.instance.monitor, h.monitor);
+    assert.equal(timers, 0);
+});
+
+test('shorthand lock missile target then away works for representative missiles', () => {
+    for (const [alias, reply] of [
+        ['aim9', 'flares'],
+        ['aim7', 'chaffs'],
+        ['aim120', 'chaffs'],
+        ['aim4 falcon', 'flares chaffs'],
+        ['r27et', 'flares'],
+        ['mica ir', 'flares'],
+        ['mica em', 'chaffs'],
+        ['pl12', 'chaffs'],
+        ['aa3', 'flares chaffs'],
+        ['aa12', 'chaffs']
+    ]) {
+        const h = setup();
+        h.receive('lock ' + alias + ' t9');
+        const threat = h.state.engagements[0];
+        assert.ok(threat, alias);
+        assert.equal(threat.phase, 'LOCKED', alias);
+        assert.deepEqual(h.sent, [], alias);
+        h.receive('away');
+        assert.deepEqual(h.sent, [reply], alias);
+        assert.equal(threat.phase, 'COUNTERED', alias);
+    }
+});
+
+test('shorthand locks preserve full targets and specific missile guidance', () => {
+    for (const [text, reply] of [
+        ['lock aim9 t9', 'flares'],
+        ['lock aa12 t9', 'chaffs'],
+        ['locked aa3 t9', 'flares chaffs'],
+        ['locking r27et t9', 'flares'],
+        ['lock mica ir t9', 'flares'],
+        ['lock mica em t9', 'chaffs'],
+        ['lock aim9c t9', 'chaffs'],
+        ['lock aa12 The Very Long Pilot Name', 'chaffs']
+    ]) {
+        const h = setup();
+        h.settings.set('customAliases', ['The Very Long Pilot Name']);
+        h.receive(text);
+        h.receive('away');
+        assert.deepEqual(h.sent, [reply], text);
+    }
+    const h = setup();
+    for (const text of ['lock aa12 t8', 'lock not-a-missile t9', 'lock aa12']) {
+        h.receive(text);
+        h.receive('away');
+    }
+    assert.deepEqual(h.sent, []);
+    assert.equal(h.state.engagements.length, 0);
 });

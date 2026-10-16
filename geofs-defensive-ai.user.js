@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoFS Defensive AI
 // @namespace    GeoFS
-// @version      4.4
+// @version      5.1
 // @description  Combat assistant: auto identity detection, lock -> fire -> countermeasure -> hit/miss state engine, confidence scoring, HUD, settings (Alt+D)
 // @match        https://www.geo-fs.com/*
 // @grant        none
@@ -9,6 +9,7 @@
 
 (function () {
     'use strict';
+    if (window.__GeoFSDefenseAI && window.__GeoFSDefenseAI.instance) return;
 
     // ---------- helpers ----------
     const NUM_WORDS = { zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', niner: '9' };
@@ -440,8 +441,8 @@
         }
     }
     const FOX_RE = /\bfox ?([1-4])\b/;
-    const COUNTER = { ir: 'FLARES', radar: 'CHAFFS', mixed: 'FLARES/CHAFFS', passive: 'EVADING', beam: 'EVADING', gun: 'EVADING', unknown: 'FLARES/CHAFFS' };
-    const REPLY = { ir: 'flares', radar: 'chaffs', mixed: 'flares chaffs', passive: 'evading', beam: 'evading', gun: 'evading' };
+    const COUNTER = { ir: 'FLARES', radar: 'CHAFFS', mixed: 'FLARES/CHAFFS', passive: 'EVADING', beam: 'EVADING', gun: 'EVADE', unknown: 'FLARES/CHAFFS' };
+    const REPLY = { ir: 'flares', radar: 'chaffs', mixed: 'flares chaffs', passive: 'evading', beam: 'evading', gun: 'evade' };
 
     function findWeapon(n) {
         const f = FOX_RE.exec(n);
@@ -485,24 +486,65 @@
         return null;
     }
 
+    function findWeaponExact(n) {
+        const text = normalize(n);
+        const hits = MISSILE_ALIASES.get(text);
+        if (hits && hits.length) {
+            let weapon = hits.map(m => m.weapon).join(' / ');
+            let cls = new Set(hits.map(m => m.cls)).size === 1 ? hits[0].cls : 'mixed';
+            for (const w of WEAPONS) {
+                const match = w.re.exec(text);
+                if (match && match[0] === text) { weapon = w.name; cls = w.cls; break; }
+            }
+            return { weapon, cls, fox: null };
+        }
+        return null;
+    }
+
     // Parse one message into combat events.
     function parseMessage(text) {
         const n = normalize(text);
         const ev = [];
         if (!n) return ev;
         let m;
+        const launchWord = /\b(away|fire|firing|fired|launch|launching|launched|shoot|shooting|shot|rifle)\b/.test(n);
         if (/\blost lock\b|\block lost\b|\bno lock\b/.test(n)) { ev.push({ type: 'LOST_LOCK' }); return ev; }
-        if ((m = /\bguns?(?: guns?)* on (.+)$/.exec(n))) {
-            ev.push({ type: 'GUNS', target: m[1] });
+        if ((m = /\bguns?(?: guns?)*\b(?:\s+(?:(?:on|at)\s+)?(.*))?$/.exec(n))) {
+            ev.push({ type: 'GUNS', target: /^(?:on|at)$/.test(m[1] || '') ? '' : m[1] || '' });
             return ev;
         }
-        if (/\bguns?(?: guns?)* on$/.test(n)) { ev.push({ type: 'GUNS', target: '' }); return ev; }
-        if ((m = /\block(?:ing|ed)? (.*?)\s*\bon (.+)$/.exec(n))) {
-            ev.push(Object.assign({ type: 'LOCK', target: m[2] }, findWeapon(m[1]) || { weapon: null, cls: 'unknown', fox: null }));
+        if ((m = /\bfox ?4\b(?:\s+(?:(?:on|at)\s+)?(.+))?$/.exec(n))) {
+            const target = (m[1] || '').replace(/^(?:away|firing|fired)\b\s*(?:(?:on|at)\s+)?/, '');
+            ev.push({ type: 'LAUNCH', target, weapon: 'FOX-4', cls: 'gun', fox: 4 });
             return ev;
         }
-        if (/\bfox ?4\b/.test(n) && !/\baway\b/.test(n)) { /* gun call without target handled via launch below */ }
-        const launchWord = /\b(away|firing|fired|launch|launched|shot|rifle)\b/.test(n);
+        if ((m = /\block(?:ing|ed)?\s+(?:(.*?)\s+)?(?:on|onto)\s+(.+)$/.exec(n))) {
+            const after = /\b(?:with|using)\s+(.+)$/.exec(m[2]);
+            const weaponText = n.slice(0, m.index) + ' ' + (m[1] || '') + ' ' + (after ? after[1] : '');
+            const weapon = findWeapon(weaponText) || { weapon: null, cls: 'unknown', fox: null };
+            const target = after ? m[2].slice(0, after.index).trim() : m[2];
+            ev.push(Object.assign({ type: 'LOCK', target }, weapon));
+            if (/\b(?:away|fire|firing|fired|launch|launching|launched|shoot|shooting|shot|rifle)$/.test(n)) {
+                ev.push(Object.assign({ type: 'LAUNCH', target }, weapon));
+            }
+            return ev;
+        }
+        if ((m = /^\s*lock(?:ing|ed)?\s+(.+)$/i.exec(n))) {
+            const words = m[1].split(' ').filter(Boolean);
+            for (let prefix = Math.min(4, words.length); prefix >= 1; prefix--) {
+                const weaponText = words.slice(0, prefix).join(' ');
+                const weapon = findWeaponExact(weaponText);
+                if (!weapon) continue;
+                let targetWords = words.slice(prefix);
+                while (targetWords.length && /^(?:on|onto|at|with|using)$/.test(targetWords[0])) targetWords.shift();
+                const target = targetWords.join(' ').trim();
+                ev.push(Object.assign({ type: 'LOCK', target }, weapon));
+                if (/\b(?:away|fire|firing|fired|launch|launching|launched|shoot|shooting|shot|rifle)$/.test(n)) {
+                    ev.push(Object.assign({ type: 'LAUNCH', target }, weapon));
+                }
+                return ev;
+            }
+        }
         const fox = FOX_RE.exec(n);
         if (launchWord || fox) {
             const t = /\b(?:on|at) (.+)$/.exec(n);
@@ -516,7 +558,7 @@
         else if (/\b(flares?|flaring)\b/.test(n) && /\b(chaffs?|chaffing)\b/.test(n)) ev.push({ type: 'COUNTER', cls: 'mixed' });
         else if (/\b(flares?|flaring)\b/.test(n)) ev.push({ type: 'COUNTER', cls: 'ir' });
         else if (/\b(chaffs?|chaffing)\b/.test(n)) ev.push({ type: 'COUNTER', cls: 'radar' });
-        else if (/\bevading\b/.test(n)) ev.push({ type: 'COUNTER', cls: 'gun' });
+        else if (/\b(?:evade|evading)\b/.test(n)) ev.push({ type: 'COUNTER', cls: 'gun' });
         return ev;
     }
 
@@ -863,12 +905,13 @@
             const related = this.buffer.items.some(m => m.sender === sender && t - m.t <= 10000);
             this.buffer.add({ t, sender, text });
             const events = parseMessage(text);
-            const rec = { t, sender, text, events: events.map(e => e.type), score: 0, accepted: false };
+            const rec = { t, sender, text, events: events.map(e => e.type), score: 0, accepted: false, reason: 'No combat phrase recognized' };
             this.last.push(rec);
             if (this.last.length > 15) this.last.shift();
             const att = String(sender).toLowerCase();
             for (const ev of events) {
                 if (mine || ev.type === 'LOST_LOCK' || ev.type === 'HIT' || ev.type === 'MISS' || ev.type === 'COUNTER') {
+                    rec.reason = mine ? 'Own message (automatic defense ignores your attacks)' : 'State update';
                     this.state.apply(ev, sender, t, mine);
                     continue;
                 }
@@ -879,7 +922,10 @@
                 const lock = ev.type === 'LAUNCH' ? this.state.findLock(att, t) : null;
                 const named = !!ev.target;
                 const targetsMe = named && this.aliases.isUser(ev.target);
-                if (named && !targetsMe) continue;
+                if (named && !targetsMe) {
+                    rec.reason = this.aliases.active.length ? 'Target does not match active aliases: ' + ev.target : 'No active player aliases';
+                    continue;
+                }
                 const parts = {
                     alias: targetsMe || (!named && !!lock),
                     weapon: ev.type === 'GUNS' || (ev.cls && ev.cls !== 'unknown') || !!(lock && lock.cls !== 'unknown'),
@@ -887,14 +933,19 @@
                     related
                 };
                 rec.score = Math.max(rec.score, this.score(parts));
-                if (rec.score < this.s.get('confidenceMin')) continue;
+                if (rec.score < this.s.get('confidenceMin')) {
+                    rec.reason = !named && !lock ? 'No target or matching lock from this sender' :
+                        !parts.weapon ? 'Missile alias not recognized' : 'Confidence below configured threshold';
+                    continue;
+                }
                 if (ev.type === 'GUNS' || (ev.type === 'LAUNCH' && !lock)) {
                     const key = att + '|' + ev.type + '|' + (ev.cls || 'gun');
                     const prev = this.recent.get(key);
-                    if (prev != null && t - prev < this.s.get('dedupeMs')) continue;
+                    if (prev != null && t - prev < this.s.get('dedupeMs')) { rec.reason = 'Duplicate launch suppressed'; continue; }
                     this.recent.set(key, t);
                 }
                 rec.accepted = true;
+                rec.reason = ev.type === 'LOCK' ? 'Lock recorded; waiting for launch' : 'Launch accepted';
                 this.state.apply(ev, sender, t, false);
             }
             return events;
@@ -911,6 +962,7 @@
             this.lastSendStatus = 'No reply attempted';
             this.failWarned = false; this.wizardShown = false;
             this.pendingReplies = new Map();
+            this.hookedChats = new WeakSet();
             this.state.on('reply', (text, threat) => {
                 const sent = this.send(text);
                 if (!sent) this.pendingReplies.set(threat.id, { text, threat });
@@ -923,6 +975,12 @@
             });
         }
         send(text) {
+            const blocked = this.chatBlocker();
+            if (blocked) {
+                if (this.lastSendStatus !== blocked) this.hud.notify(blocked, 'orange', 6000);
+                this.lastSendStatus = blocked;
+                return false;
+            }
             const now = Date.now();
             const cd = this.s.get('cooldowns') || {};
             if (now - (cd.lastReply || 0) < this.s.get('replyCooldownMs')) {
@@ -937,7 +995,10 @@
                         this.lastSendStatus = 'Reply waiting: GeoFS chat queue is busy';
                         return false;
                     }
-                    mp.setChatMessage(text);
+                    const result = mp.setChatMessage(text);
+                    if (result === false || 'chatMessage' in mp && mp.chatMessage !== text) {
+                        throw new Error('GeoFS did not accept the outgoing chat message.');
+                    }
                 }
                 else if (chat && typeof chat.sendMessage === 'function') chat.sendMessage(text);
                 else throw new Error('GeoFS chat API is unavailable. Wait for multiplayer to load.');
@@ -955,11 +1016,19 @@
             this.lastSendStatus = 'Queued for GeoFS chat: ' + text;
             return true;
         }
+        chatBlocker() {
+            const g = window.geofs;
+            if (g && g.preferences && g.preferences.chat === false) return 'Chat blocked: enable GeoFS chat in its options';
+            if (g && g.userRecord && g.userRecord.role === 0) return 'Chat blocked: sign in to GeoFS';
+            return '';
+        }
         flushReplies() {
             for (const [id, pending] of this.pendingReplies) {
                 const e = pending.threat;
                 if (!this.s.get('enabled') || !this.s.get('autoChat') || e.phase !== 'LAUNCHED' || this.state.now() >= e.deadline) {
                     this.pendingReplies.delete(id);
+                    this.lastSendStatus = !this.s.get('enabled') || !this.s.get('autoChat') ? 'Pending reply cancelled: automatic defense disabled' :
+                        e.replied ? 'Countermeasure already recorded' : 'Reply cancelled or expired before sending: ' + pending.text;
                     continue;
                 }
                 if (this.send(pending.text)) {
@@ -978,20 +1047,24 @@
         }
         _isOwn(m) {
             const info = this.aliases.identity.info;
-            if (info.accountId && m.acid != null && String(m.acid) === info.accountId) return true;
-            if (info.myId && m.uid != null && String(m.uid) === info.myId) return true;
+            if (info.accountId && m.acid != null) return String(m.acid) === info.accountId;
+            if (info.myId && m.uid != null) return String(m.uid) === info.myId;
             const s = canon(m.sender);
             return !!s && this.aliases.ownNames().some(n => canon(n) === s);
         }
-        ingest(list) {
+        ingest(list, source) {
             if (!Array.isArray(list)) return;
+            const chat = window.ui && window.ui.chat;
+            // Native publication represents a fresh message, even without an ID.
+            // While hooked, do not also process its network-response copy.
+            if (source !== 'published' && this.publishHook && chat && chat.publish === this.publishHook) return;
             for (const m of list) {
                 if (!m || !m.msg) continue;
                 let text;
                 try { text = decodeURIComponent(String(m.msg).replace(/\+/g, ' ')); } catch (e) { text = String(m.msg); }
                 const sender = m.cs || m.callsign || m.name || m.acid || m.id || '?';
                 const key = [m.id, m.ts, m.t, m.time, m.uid, m.acid, sender, text].join('|');
-                if (this.seen.has(key)) continue;
+                if (source !== 'published' && this.seen.has(key)) continue;
                 this.seen.set(key, 1);
                 if (this.seen.size > 500) this.seen.delete(this.seen.keys().next().value);
                 this.queue.push({ id: m.id, uid: m.uid, acid: m.acid, sender: String(sender), text, t: Date.now() });
@@ -1024,63 +1097,31 @@
                 }
             } else this.failWarned = false;
         }
-        _hook() {
-            const self = this;
-            const orig = window.fetch;
-            if (typeof orig === 'function') {
-                window.fetch = function (input) {
-                    const p = orig.apply(this, arguments);
-                    try {
-                        const url = typeof input === 'string' ? input : (input && input.url) || '';
-                        if (url.indexOf('mps.geo-fs.com/update') >= 0) {
-                            p.then(res => res.clone().json()).then(d => { if (d && d.chatMessages) self.ingest(d.chatMessages); }).catch(() => { /* ignore */ });
-                        }
-                    } catch (e) { /* ignore */ }
-                    return p;
-                };
-            }
-            // GeoFS multiplayer may also use XMLHttpRequest
-            const XHR = window.XMLHttpRequest;
-            if (XHR && XHR.prototype) {
-                const open = XHR.prototype.open;
-                XHR.prototype.open = function (method, url) {
-                    try {
-                        if (String(url).indexOf('mps.geo-fs.com/update') >= 0) {
-                            this.addEventListener('load', function () {
-                                try { const d = JSON.parse(this.responseText); if (d && d.chatMessages) self.ingest(d.chatMessages); } catch (e) { /* ignore */ }
-                            });
-                        }
-                    } catch (e) { /* ignore */ }
-                    return open.apply(this, arguments);
-                };
-            }
-        }
         hookPublishedChat() {
             const chat = window.ui && window.ui.chat;
-            if (!chat || typeof chat.publish !== 'function' || chat.publish === this.publishHook) return;
+            if (!chat || typeof chat.publish !== 'function' || this.hookedChats.has(chat)) return;
             const original = chat.publish;
             const self = this;
             this.publishHook = function (message) {
                 const result = original.apply(this, arguments);
-                self.ingest([message]);
+                self.ingest([message], 'published');
                 return result;
             };
             chat.publish = this.publishHook;
+            this.hookedChats.add(chat);
         }
         start() {
             if (this.started) return; this.started = true;
             this.checkIdentity();
             this.s.onChange((k) => { if (k === 'customAliases' || k === 'disabledDetected') this.aliases.rebuild(); });
-            this._hook();
             this.hookPublishedChat();
-            let n = 0;
             this.tickTimer = setInterval(() => {
                 if (!this.s.get('enabled')) return;
-                if (++n % 4 === 0) this.checkIdentity();
+                this.checkIdentity();
                 this.hookPublishedChat();
                 this.detector.tick();
                 this.flushReplies();
-            }, 250);
+            }, 1000);
         }
     }
 
@@ -1114,8 +1155,8 @@
         document.addEventListener('keydown', (e) => { if (e.altKey && e.code === 'KeyD') { e.preventDefault(); toggle(); } });
 
         const mk = (tag, text, parent) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (parent) parent.appendChild(el); return el; };
-        mk('b', 'GeoFS Defensive AI v4.4', panel);
-        mk('div', 'Missile aliases include designations and common/NATO names. IR: flares; radar: chaffs; unspecified IR/radar variants: both; beam/passive: evading. Chat roleplay only, not a guarantee of defeating a missile.', panel);
+        mk('b', 'GeoFS Defensive AI v5.1', panel);
+        mk('div', 'Missile aliases include designations and common/NATO names. IR: flares; radar: chaffs; unspecified IR/radar variants: both; FOX-4/guns: evade; beam/passive: evading. Defense tick: 1 second. Chat roleplay only, not a guarantee of defeating a missile.', panel);
         const checks = [];
         [['enabled', 'Enable addon'], ['autoChat', 'Auto chat replies'], ['hud', 'HUD banners'], ['sounds', 'Sounds']].forEach(([k, label]) => {
             const l = mk('label', null, panel); const c = mk('input', null, l); c.type = 'checkbox';
@@ -1153,6 +1194,17 @@
             ta.value = ''; impBox.style.display = 'none'; save();
         };
         const bDbg = mk('button', 'Debug panel', panel);
+        const chatStatus = mk('div', '', panel);
+        const bTest = mk('button', 'Send test chat: flares', panel);
+        bTest.onclick = () => {
+            if (!settings.get('enabled')) {
+                hud.notify('Enable Defense AI before sending a test message.', 'orange', 4000);
+                return;
+            }
+            const sent = ctx.monitor.send('flares');
+            hud.notify(sent ? 'Test queued. Check GeoFS chat for your flares message.' : ctx.monitor.lastSendStatus, sent ? 'green' : 'orange', 6000);
+            sync();
+        };
         const dbg = mk('pre', '', panel); dbg.style.display = 'none';
         bDbg.onclick = () => { dbg.style.display = dbg.style.display === 'none' ? 'block' : 'none'; sync(); };
 
@@ -1173,10 +1225,13 @@
             L.push('Threat buffer:');
             state.engagements.slice(-6).forEach(e => L.push('  #' + e.id + ' ' + e.attackerName + ' ' + (e.weapon || '?') + ' ' + e.phase));
             L.push('Last messages:');
-            detector.last.slice(-8).forEach(m => L.push('  ' + m.sender + ': ' + m.text + ' [' + (m.events.join(',') || '-') + ' ' + m.score + (m.accepted ? ' OK' : '') + ']'));
+            detector.last.slice(-8).forEach(m => L.push('  ' + m.sender + ': ' + m.text + ' [' + (m.events.join(',') || '-') + ' ' + m.score + (m.accepted ? ' OK' : '') + '] ' + m.reason));
             return L.join('\n');
         }
         function sync(keepRows) {
+            chatStatus.textContent = !settings.get('enabled') ? 'Defense AI is disabled' :
+                !settings.get('autoChat') ? 'Automatic replies are disabled' :
+                    ctx.monitor.chatBlocker() || ctx.monitor.lastSendStatus;
             checks.forEach(([k, c]) => { c.checked = !!settings.get(k); });
             detBox.textContent = '';
             const off = new Set((settings.get('disabledDetected') || []).map(canon));
@@ -1193,7 +1248,13 @@
             if (!keepRows) { rowsBox.textContent = ''; rows.length = 0; aliases.custom.forEach(a => addRow(a)); }
             if (dbg.style.display !== 'none') dbg.textContent = debugText();
         }
-        setInterval(() => { if (panel.style.display === 'block' && dbg.style.display !== 'none') dbg.textContent = debugText(); }, 500);
+        setInterval(() => {
+            if (panel.style.display !== 'block') return;
+            chatStatus.textContent = !settings.get('enabled') ? 'Defense AI is disabled' :
+                !settings.get('autoChat') ? 'Automatic replies are disabled' :
+                    ctx.monitor.chatBlocker() || ctx.monitor.lastSendStatus;
+            if (dbg.style.display !== 'none') dbg.textContent = debugText();
+        }, 500);
 
         function showWizard() {
             if (document.getElementById('gdai-wizard')) return;
@@ -1238,3 +1299,4 @@
         if (document.body) go(); else document.addEventListener('DOMContentLoaded', go);
     }
 })();
+

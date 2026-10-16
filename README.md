@@ -8,7 +8,7 @@ Install Tampermonkey, then open `geofs-defensive-ai.user.js` (raw) and confirm t
 ## Rules followed
 - `lock/locking <weapon> on <callsign>` creates a pending threat (LOCKED). No response is sent.
 - `away` / `firing` / `fox N away` launches it (LAUNCHED) and starts a 5 s countermeasure window.
-- IR weapons -> flares, radar weapons -> chaffs, guns/Fox 4 -> evading (guns are immediate).
+- IR weapons -> flares, radar weapons -> chaffs, guns/Fox 4 -> evade (guns are immediate).
 - States: LOCKED, LAUNCHED, COUNTERED, HIT, MISSED, EXPIRED. Locks expire after 30 s.
 - Targets are matched by alias (A1, Alpha-1, Alpha One, ...). Threats aimed at others are ignored.
 - One auto reply per threat. Chat buffer: 50 messages / 60 s.
@@ -34,7 +34,7 @@ Air-to-air missile alias database (100 missiles, 4,697 aliases) with FOX type an
 - Live delivery and countermeasure effectiveness are not guaranteed.
 
 ## Tests
-Run `node --test counteruser.test.js` with Node.js to check the regression tests, including recognition of every database alias.
+Run `node --test counteruser.test.js` with Node.js to check the regression tests, including representative shorthand lock parsing and database alias coverage.
 Run `node missiledb/embed.cjs --check` to verify the embedded lookup is up to date.
 
 ## v4.3
@@ -50,3 +50,32 @@ Run `node missiledb/embed.cjs --check` to verify the embedded lookup is up to da
 - Pending automatic replies wait for cooldowns or a busy native chat slot and retry within the threat's five-second countermeasure window. They are dropped on expiry or when automatic replies are disabled, and never overwrite another queued chat message.
 - The debug panel shows identity sources, send status, and pending reply count. A queued reply still does not guarantee server delivery.
 - When using a standalone copy such as `counteruser.js`, replace it with the current `geofs-defensive-ai.user.js` contents; older copies do not receive database updates automatically. Enable only one copy of the addon.
+
+## v4.5
+- Accepts weapon-first locks (`aa12 locked on T9`), target-first locks (`lock on T9 with aa3`), `onto` targets, and `fire`, `shoot`, or `launching` launch calls. Combined lock-and-launch calls ending in `away` or a launch verb now launch the recorded threat in the same message.
+- Checks explicit GeoFS chat, login, and multiplayer readiness flags before queuing a reply. Native API rejection is surfaced rather than reported as a successful countermeasure.
+- Alt+D shows current chat blockers and includes **Send test chat: flares**. This button posts a real chat message when clicked; it does not simulate an incoming attack.
+- The debug panel explains ignored messages (unmatched target, unrecognized missile, no prior lock, duplicate, or own message). Testing your own attack calls will not trigger automatic defense; have a different player send them.
+- Known sender IDs take precedence over matching callsigns, so another player using the same callsign is not mistaken for the local account.
+- Native chat publication is the primary incoming source when available; network capture remains the fallback. Repeated fresh calls without message IDs/timestamps are no longer permanently discarded, and network copies of published messages are ignored.
+- Tests now exercise every database designation/alias through the full lock -> launch -> native outgoing chat path, not just parsing. Server delivery remains dependent on GeoFS and is not confirmed by the local queue.
+
+## v4.6
+- Gun attacks now reply exactly `evade`: `fox4 <name>`, `fox 4 <name>`, `guns <name>`, `guns guns guns <name>`, and `gun <name>`. Existing `on`/`at` target forms remain supported; bare FOX-4 calls require a prior lock from that sender.
+- IR missiles still reply `flares`, radar missiles reply `chaffs`, and unspecified mixed-seeker families retain `flares chaffs` until guidance is identified. Beam/passive guidance retains `evading`.
+- Defense maintenance, identity refresh, and queued-reply retries tick every 1,000 ms. Incoming attacks are still processed immediately; this does not change the reply cooldown or five-second countermeasure window.
+- Both `evade` and legacy `evading` are accepted as manually posted evasion countermeasures.
+
+## v4.7: connection safety
+- Removed all fetch/XHR interception. Detection observes native `ui.chat.publish` only; it waits for that API to load rather than inspecting MPS network responses.
+- Each native chat object is hooked at most once, even if another addon wraps the same method. Duplicate execution of this version exits when an existing Defensive AI instance is present.
+- The one-second tick is local maintenance only: it does not send MPS requests, reconnect multiplayer, or change GeoFS update timing. Countermeasure messages use the normal GeoFS chat queue and existing reply cooldown.
+- After installing this version, close old GeoFS tabs and disable duplicate/older Defensive AI copies before loading a single tab. A reload is required to discard wrappers installed by old versions. If MPS returns HTTP 429, stop repeated reloads and allow the server rate limit to clear; this addon cannot reset it.
+
+## v4.8
+- Removed the inaccurate "GeoFS multiplayer is not running" chat blocker. `multiplayer.on` and `multiplayer.started` no longer prevent replies when the native chat API is available.
+- Explicit disabled-chat and signed-out checks remain, along with busy-queue, cooldown, and API rejection handling. The addon does not change multiplayer lifecycle flags or force a connection.
+
+## v5.1
+- Shorthand lock parsing now prefers real missile aliases before the target token, so representative calls like `lock aim9 t9`, `lock r27et t9`, `lock mica ir t9`, and `lock aa3 t9` resolve correctly instead of swallowing the target.
+- The addon's current installable script version is 5.1.
