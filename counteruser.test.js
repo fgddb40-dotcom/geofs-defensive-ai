@@ -10,6 +10,8 @@ function setup(options = {}) {
     const sent = [];
     const notifications = [];
     const errors = [];
+    let now = Date.now();
+    const intervals = [];
     const chat = { sendMessage: text => sent.push(text) };
     const window = {
         __GeoFSDefenseAI_NOAUTO: true,
@@ -19,17 +21,19 @@ function setup(options = {}) {
     };
     const context = vm.createContext({
         window,
+        Date: class extends Date { static now() { return now; } },
         console: { error: (...args) => errors.push(args) },
         setTimeout: () => 1,
-        setInterval: () => 1
+        setInterval: callback => { intervals.push(callback); return intervals.length; },
+        ...(options.document ? { document: options.document } : {})
     });
+    if (options.geofs) window.geofs = options.geofs;
     vm.runInContext(source, context);
     const api = window.__GeoFSDefenseAI;
     const settings = new api.SettingsManager();
     settings.set('replyCooldownMs', 0);
     if (options.autoChat === false) settings.set('autoChat', false);
     const aliases = new api.AliasManager(settings, new api.IdentityDetector());
-    let now = Date.now();
     const state = new api.ThreatStateManager(settings, aliases, { now: () => now });
     const detector = new api.ThreatDetector(settings, aliases, state);
     const monitor = new api.ChatMonitor({
@@ -42,11 +46,12 @@ function setup(options = {}) {
     let ts = 0;
     function receive(text, sender = 'attacker') {
         monitor.ingest([{ cs: sender, msg: encodeURIComponent(text), ts: ++ts }]);
+        monitor.queue.forEach(message => { message.t = now; });
         monitor._flush();
     }
     return {
-        api, window, originalFetch, settings, state, detector, monitor, sent, receive,
-        chat, notifications, errors,
+        api, window, originalFetch, settings, aliases, state, detector, monitor, sent, receive,
+        chat, notifications, errors, intervals,
         advance(ms) { now += ms; }
     };
 }
@@ -334,4 +339,223 @@ test('manual evading calls handle beam and passive guidance', () => {
         assert.equal(h.state.engagements[0].phase, 'COUNTERED', weapon);
         assert.deepEqual(h.sent, []);
     }
+});
+
+test('every database designation and alias is available without network access', () => {
+    const h = setup();
+    const records = JSON.parse(fs.readFileSync(path.join(__dirname, 'missiledb', 'master_missile_database.json'), 'utf8'));
+    for (const record of records) {
+        for (const alias of [record.official_name, ...record.aliases]) {
+            for (const text of [alias.toLowerCase(), alias.toUpperCase()]) {
+                const events = h.api.parseMessage('lock ' + text + ' on t9');
+                assert.equal(events[0].type, 'LOCK', text);
+                assert.notEqual(events[0].cls, 'unknown', record.official_name + ': ' + text);
+                assert.ok(events[0].weapon, text);
+            }
+        }
+    }
+});
+
+test('database-only names and nicknames trigger appropriate replies', () => {
+    for (const [alias, reply] of [
+        ['Slammer', 'chaffs'], ['Winder', 'flares'], ['Gunslinger', 'chaffs'],
+        ['CUDA', 'chaffs'], ['AIM-82', 'flares'], ['AIM-152', 'chaffs'],
+        ['KS-172', 'chaffs'], ['PL-21', 'chaffs'], ['PL-3', 'flares'],
+        ['Python 6', 'flares'], ['Astra IR', 'flares'], ['AAM-6', 'chaffs'],
+        ['TianJian-1', 'flares'], ['Chinese AMRAAM', 'chaffs'],
+        ['R-27ET1 export', 'flares'], ['AIM-9C Sidewinder', 'chaffs'],
+        ['AA-10 Alamo B', 'flares'], ['MICA', 'flares chaffs']
+    ]) {
+        const h = setup();
+        h.receive('lock ' + alias + ' on t9');
+        assert.deepEqual(h.sent, [], alias);
+        h.receive('away');
+        assert.deepEqual(h.sent, [reply], alias);
+        assert.equal(h.state.engagements[0].phase, 'COUNTERED', alias);
+    }
+});
+
+test('longer database aliases win over generic names inside them', () => {
+    const h = setup();
+    for (const [alias, weapon, cls] of [
+        ['Chinese AMRAAM', 'PL-12', 'radar'],
+        ['Astra IR', 'Astra IR', 'ir'],
+        ['Python 6', 'Python 6', 'ir'],
+        ['Chinese Meteor', 'PL-15', 'radar']
+    ]) {
+        const event = h.api.parseMessage('lock ' + alias + ' on t9')[0];
+        assert.equal(event.weapon, weapon, alias);
+        assert.equal(event.cls, cls, alias);
+    }
+});
+
+test('embedded lookup matches the generated database', () => {
+    const { execFileSync } = require('node:child_process');
+    execFileSync(process.execPath, [path.join(__dirname, 'missiledb', 'embed.cjs'), '--check']);
+});
+
+test('detects account username, callsign and multi-word account targets', () => {
+    const h = setup({ geofs: { userRecord: { id: 42, callsign: 'T9', userName: 'The Very Long Pilot Name' } } });
+    assert.equal(h.aliases.identity.info.username, 'The Very Long Pilot Name');
+    assert.ok(h.aliases.active.includes('T9'));
+    assert.ok(h.aliases.active.includes('The Very Long Pilot Name'));
+    h.receive('lock aa3 on the very long pilot name');
+    h.receive('away');
+    assert.deepEqual(h.sent, ['flares chaffs']);
+});
+
+test('refreshes identity before processing incoming combat calls', () => {
+    const h = setup({ geofs: { userRecord: {} } });
+    h.window.geofs.userRecord = { id: 42, callsign: 'T9', username: 'Cosmo' };
+    h.receive('lock aa3 on cosmo');
+    h.receive('away');
+    assert.equal(h.aliases.identity.info.username, 'Cosmo');
+    assert.deepEqual(h.sent, ['flares chaffs']);
+});
+
+test('detects nested account profiles but not aircraft or API names', () => {
+    const h = setup({ geofs: {
+        userRecord: { account: { profile: { name: 'Cosmo', cs: 'T9' } } },
+        api: { callsign: 'Wrong pilot' },
+        aircraft: { instance: { pilotName: 'Aircraft author' } }
+    } });
+    assert.equal(h.aliases.identity.info.username, 'Cosmo');
+    assert.equal(h.aliases.identity.info.callsign, 'T9');
+    assert.equal(h.aliases.active.includes('Wrong pilot'), false);
+    assert.equal(h.aliases.active.includes('Aircraft author'), false);
+});
+
+test('reads account callsign without icon text or another player sharing label', () => {
+    const icon = { remove() { copy.textContent = 'Cosmo'; } };
+    const copy = { textContent: 'Cosmoperm_identity', querySelectorAll: () => [icon] };
+    const account = { getAttribute: () => null, cloneNode: () => copy };
+    const document = {
+        querySelector: selector => selector === '.geofs-auth .geofs-callsign' ? account : null
+    };
+    const h = setup({ geofs: { userRecord: {} }, document });
+    assert.equal(h.aliases.identity.info.callsign, 'Cosmo');
+    assert.equal(h.aliases.identity.info.username, 'Cosmo');
+    assert.ok(h.aliases.active.includes('Cosmo'));
+    h.receive('lock aa3 on cosmo');
+    h.receive('away');
+    assert.deepEqual(h.sent, ['flares chaffs']);
+});
+
+test('lowercase compact NATO aliases reach native chat', () => {
+    for (const [alias, reply] of [
+        ['aa3', 'flares chaffs'], ['AA3', 'flares chaffs'], ['Aa-3', 'flares chaffs'],
+        ['aa 3', 'flares chaffs'], ['aa8', 'flares'], ['aa11', 'flares'], ['aa12', 'chaffs'],
+        ['slammer', 'chaffs'], ['winder', 'flares'], ['aa3 fox 2', 'flares']
+    ]) {
+        const h = setup();
+        h.receive('lock ' + alias + ' on t9');
+        h.receive('away');
+        assert.deepEqual(h.sent, [reply], alias);
+        assert.equal(h.window.multiplayer.chatMessage, reply, alias);
+    }
+});
+
+test('repeated messages with distinct GeoFS timestamps are not lost', () => {
+    const h = setup();
+    for (const t of [1, 2]) {
+        h.window.multiplayer.chatMessage = '';
+        h.monitor.ingest([{ cs: 'attacker', msg: 'lock%20aa3%20on%20t9', t: t * 2 }]);
+        h.monitor._flush();
+        h.monitor.ingest([{ cs: 'attacker', msg: 'away', t: t * 2 + 1 }]);
+        h.monitor._flush();
+    }
+    assert.deepEqual(h.sent, ['flares chaffs', 'flares chaffs']);
+});
+
+test('native published chat hooks install after GeoFS loads without breaking publishing', () => {
+    const h = setup();
+    const published = [];
+    const nativeChat = { publish(message) { assert.equal(this, nativeChat); published.push(message); return 'published'; } };
+    h.window.ui = { chat: nativeChat };
+    h.intervals[0]();
+    const hook = nativeChat.publish;
+    h.intervals[0]();
+    assert.equal(nativeChat.publish, hook);
+    for (const [t, msg] of [[1, 'lock aa3 on t9'], [2, 'away']]) {
+        const message = { uid: 'attacker-id', cs: 'attacker', msg: encodeURIComponent(msg), t };
+        assert.equal(nativeChat.publish(message), 'published');
+        h.monitor.ingest([message]);
+        h.monitor._flush();
+    }
+    assert.equal(published.length, 2);
+    assert.deepEqual(h.sent, ['flares chaffs']);
+});
+
+test('recognizes own GeoFS account and multiplayer IDs, not a message ID', () => {
+    const h = setup({ geofs: { userRecord: { id: 42, callsign: 'T9', username: 'Cosmo' } } });
+    h.window.multiplayer.myId = 'session-1';
+    h.monitor.checkIdentity();
+    assert.equal(h.monitor._isOwn({ acid: 42, sender: 'old callsign' }), true);
+    assert.equal(h.monitor._isOwn({ uid: 'session-1', sender: 'old callsign' }), true);
+    assert.equal(h.monitor._isOwn({ id: 'session-1', uid: 'enemy', sender: 'attacker' }), false);
+});
+
+test('waits for occupied native chat slot instead of overwriting another message', () => {
+    const h = setup();
+    h.window.multiplayer.chatMessage = 'My manually typed message';
+    h.receive('lock aa8 on t9');
+    h.receive('away');
+    assert.equal(h.window.multiplayer.chatMessage, 'My manually typed message');
+    assert.equal(h.state.engagements[0].phase, 'LAUNCHED');
+    h.window.multiplayer.chatMessage = '';
+    h.intervals[0]();
+    assert.deepEqual(h.sent, ['flares']);
+    assert.equal(h.state.engagements[0].phase, 'COUNTERED');
+    assert.equal(h.monitor.pendingReplies.size, 0);
+});
+
+test('cooldown-delayed replies retry only inside the countermeasure window', () => {
+    const h = setup();
+    h.settings.set('replyCooldownMs', 5000);
+    h.settings.set('cooldowns', { lastReply: h.state.now() - 4000 });
+    h.receive('lock aa12 on t9');
+    h.receive('away');
+    assert.deepEqual(h.sent, []);
+    h.advance(1250);
+    h.intervals[0]();
+    assert.deepEqual(h.sent, ['chaffs']);
+    assert.equal(h.state.engagements[0].phase, 'COUNTERED');
+});
+
+test('pending replies expire or are discarded when auto chat is disabled', () => {
+    for (const disable of [true, false]) {
+        const h = setup();
+        h.window.multiplayer.chatMessage = 'busy';
+        h.receive('lock aa8 on t9');
+        h.receive('away');
+        if (disable) h.settings.set('autoChat', false);
+        else h.advance(5001);
+        h.window.multiplayer.chatMessage = '';
+        h.intervals[0]();
+        assert.deepEqual(h.sent, []);
+        assert.equal(h.monitor.pendingReplies.size, 0);
+    }
+});
+
+test('separate attackers are not suppressed as duplicate launch messages', () => {
+    const h = setup({ autoChat: false });
+    h.receive('aa8 away on t9', 'attacker one');
+    h.receive('aa8 away on t9', 'attacker two');
+    assert.equal(h.state.engagements.length, 2);
+    assert.ok(h.state.engagements.every(e => e.phase === 'LAUNCHED'));
+});
+
+test('late chat API availability recovers without repeated failure notifications', () => {
+    const h = setup();
+    delete h.window.multiplayer.setChatMessage;
+    h.receive('lock aa8 on t9');
+    h.receive('away');
+    h.intervals[0]();
+    h.intervals[0]();
+    assert.equal(h.errors.length, 1);
+    assert.equal(h.state.engagements[0].phase, 'LAUNCHED');
+    h.window.multiplayer.setChatMessage = text => h.sent.push(text);
+    h.intervals[0]();
+    assert.deepEqual(h.sent, ['flares']);
+    assert.equal(h.state.engagements[0].phase, 'COUNTERED');
 });
