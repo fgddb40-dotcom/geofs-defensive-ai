@@ -256,7 +256,7 @@ const missileCases = [
 ];
 
 const expectedReplies = {
-    ir: 'flares', radar: 'chaffs', mixed: 'flares chaffs', passive: 'evading', beam: 'evading'
+    ir: 'flares', radar: 'chaffs', mixed: 'flares', passive: 'evading', beam: 'evading'
 };
 for (const [weapon, cls, aliases] of missileCases) {
     test('detects and counters ' + weapon + ' aliases', () => {
@@ -272,7 +272,7 @@ for (const [weapon, cls, aliases] of missileCases) {
             assert.deepEqual(h.sent, [expectedReplies[cls]], alias);
             assert.equal(threat.phase, 'COUNTERED', alias);
             const hud = h.api.HUDManager.describe(threat, h.state);
-            const counter = cls === 'ir' ? 'FLARES' : cls === 'radar' ? 'CHAFFS' : cls === 'mixed' ? 'FLARES/CHAFFS' : 'EVADING';
+            const counter = cls === 'ir' ? 'FLARES' : cls === 'radar' ? 'CHAFFS' : cls === 'mixed' ? 'FLARES' : 'EVADING';
             assert.ok(hud.lines.includes('COUNTER: ' + counter), alias);
 
             const direct = setup();
@@ -365,7 +365,7 @@ test('database-only names and nicknames trigger appropriate replies', () => {
         ['Python 6', 'flares'], ['Astra IR', 'flares'], ['AAM-6', 'chaffs'],
         ['TianJian-1', 'flares'], ['Chinese AMRAAM', 'chaffs'],
         ['R-27ET1 export', 'flares'], ['AIM-9C Sidewinder', 'chaffs'],
-        ['AA-10 Alamo B', 'flares'], ['MICA', 'flares chaffs']
+        ['AA-10 Alamo B', 'flares'], ['MICA', 'flares']
     ]) {
         const h = setup();
         h.receive('lock ' + alias + ' on t9');
@@ -402,7 +402,7 @@ test('detects account username, callsign and multi-word account targets', () => 
     assert.ok(h.aliases.active.includes('The Very Long Pilot Name'));
     h.receive('lock aa3 on the very long pilot name');
     h.receive('away');
-    assert.deepEqual(h.sent, ['flares chaffs']);
+    assert.deepEqual(h.sent, ['flares']);
 });
 
 test('refreshes identity before processing incoming combat calls', () => {
@@ -411,7 +411,7 @@ test('refreshes identity before processing incoming combat calls', () => {
     h.receive('lock aa3 on cosmo');
     h.receive('away');
     assert.equal(h.aliases.identity.info.username, 'Cosmo');
-    assert.deepEqual(h.sent, ['flares chaffs']);
+    assert.deepEqual(h.sent, ['flares']);
 });
 
 test('detects nested account profiles but not aircraft or API names', () => {
@@ -439,13 +439,13 @@ test('reads account callsign without icon text or another player sharing label',
     assert.ok(h.aliases.active.includes('Cosmo'));
     h.receive('lock aa3 on cosmo');
     h.receive('away');
-    assert.deepEqual(h.sent, ['flares chaffs']);
+    assert.deepEqual(h.sent, ['flares']);
 });
 
 test('lowercase compact NATO aliases reach native chat', () => {
     for (const [alias, reply] of [
-        ['aa3', 'flares chaffs'], ['AA3', 'flares chaffs'], ['Aa-3', 'flares chaffs'],
-        ['aa 3', 'flares chaffs'], ['aa8', 'flares'], ['aa11', 'flares'], ['aa12', 'chaffs'],
+        ['aa3', 'flares'], ['AA3', 'flares'], ['Aa-3', 'flares'],
+        ['aa 3', 'flares'], ['aa8', 'flares'], ['aa11', 'flares'], ['aa12', 'chaffs'],
         ['slammer', 'chaffs'], ['winder', 'flares'], ['aa3 fox 2', 'flares']
     ]) {
         const h = setup();
@@ -465,7 +465,7 @@ test('repeated messages with distinct GeoFS timestamps are not lost', () => {
         h.monitor.ingest([{ cs: 'attacker', msg: 'away', t: t * 2 + 1 }]);
         h.monitor._flush();
     }
-    assert.deepEqual(h.sent, ['flares chaffs', 'flares chaffs']);
+    assert.deepEqual(h.sent, ['flares', 'flares']);
 });
 
 test('native published chat hooks install after GeoFS loads without breaking publishing', () => {
@@ -484,7 +484,7 @@ test('native published chat hooks install after GeoFS loads without breaking pub
         h.monitor._flush();
     }
     assert.equal(published.length, 2);
-    assert.deepEqual(h.sent, ['flares chaffs']);
+    assert.deepEqual(h.sent, ['flares']);
 });
 
 test('recognizes own GeoFS account and multiplayer IDs, not a message ID', () => {
@@ -563,7 +563,7 @@ test('late chat API availability recovers without repeated failure notifications
 
 test('non-AIM9 missiles accept common lock and fire phrasing', () => {
     for (const [lock, launch, reply] of [
-        ['lock on t9 with aa3', 'fire', 'flares chaffs'],
+        ['lock on t9 with aa3', 'fire', 'flares'],
         ['aa12 locked on t9', 'shoot', 'chaffs'],
         ['locking aa11 onto t9', 'missile away', 'flares'],
         ['locked r27et on t9', 'launch', 'flares'],
@@ -579,7 +579,7 @@ test('non-AIM9 missiles accept common lock and fire phrasing', () => {
 
 test('combined lock and launch messages send the correct countermeasure', () => {
     for (const [message, reply] of [
-        ['lock aa3 on t9 away', 'flares chaffs'],
+        ['lock aa3 on t9 away', 'flares'],
         ['aa12 locked on t9 firing', 'chaffs'],
         ['lock on t9 with iris-t and fire', 'flares']
     ]) {
@@ -859,17 +859,32 @@ test('duplicate userscript execution preserves the existing instance and install
     assert.equal(timers, 0);
 });
 
+test('explicit missile variants resolve to their own countermeasure before generic family fallback', () => {
+    for (const [text, reply] of [
+        ['lock r27et on t9', 'flares'],
+        ['lock r27er on t9', 'chaffs'],
+        ['lock r27ep on t9', 'evading'],
+        ['lock aa3 on t9', 'flares'],
+        ['lock aa12 on t9', 'chaffs']
+    ]) {
+        const h = setup();
+        h.receive(text);
+        h.receive('away');
+        assert.deepEqual(h.sent, [reply], text);
+    }
+});
+
 test('shorthand lock missile target then away works for representative missiles', () => {
     for (const [alias, reply] of [
         ['aim9', 'flares'],
         ['aim7', 'chaffs'],
         ['aim120', 'chaffs'],
-        ['aim4 falcon', 'flares chaffs'],
+        ['aim4 falcon', 'flares'],
         ['r27et', 'flares'],
         ['mica ir', 'flares'],
         ['mica em', 'chaffs'],
         ['pl12', 'chaffs'],
-        ['aa3', 'flares chaffs'],
+        ['aa3', 'flares'],
         ['aa12', 'chaffs']
     ]) {
         const h = setup();
@@ -888,7 +903,7 @@ test('shorthand locks preserve full targets and specific missile guidance', () =
     for (const [text, reply] of [
         ['lock aim9 t9', 'flares'],
         ['lock aa12 t9', 'chaffs'],
-        ['locked aa3 t9', 'flares chaffs'],
+        ['locked aa3 t9', 'flares'],
         ['locking r27et t9', 'flares'],
         ['lock mica ir t9', 'flares'],
         ['lock mica em t9', 'chaffs'],

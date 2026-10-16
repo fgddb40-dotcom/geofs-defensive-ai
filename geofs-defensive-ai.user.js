@@ -388,7 +388,7 @@
         ["TianJian-1","ir",["tian jian","tian jian 1","tianjian","tianjian 1","tianjian1","tj 1","tj1","ty 1","ty1"]],
         ["R.510","radar",["matra r 510","matra r510","matrar510","nord 5103","nord 5103 aam","nord5103","nord5103aam","r 510","r510"]],
         ["R.511","radar",["matra r 511","matra r511","matrar511","nord r 511","nordr511","r 511","r511"]],
-        ["R.530","mixed",["matra r 530","matra r530","matrar530","mirage f1 missile","mirage iii missile","miragef1missile","mirageiiimissile","r 530","r 530 em","r 530 ir","r 530e","r 530f","r530","r530 em","r530 ir","r530e","r530em","r530f","r530ir"]],
+        ["R.530","ir",["matra r 530","matra r530","matrar530","mirage f1 missile","mirage iii missile","miragef1missile","mirageiiimissile","r 530","r 530 em","r 530 ir","r 530e","r 530f","r530","r530 em","r530 ir","r530e","r530em","r530f","r530ir"]],
         ["Super 530F","radar",["matra super 530","matra super 530f","matrasuper530","matrasuper530f","mirage 2000 super 530f","mirage f1 super 530","mirage2000super530f","miragef1super530","s 530f","s530f","super 530","super 530 f","super 530 french","super 530f","super 530f 1","super 530f export","super 530f1","super530","super530 f","super530f","super530f1","super530fexport","super530french"]],
         ["Super 530D","radar",["matra super 530d","matrasuper530d","mirage 2000 super 530d","mirage2000super530d","s 530d","s530d","super 530 d","super 530d","super 530d doppler","super 530d mirage 2000","super530 d","super530d","super530ddoppler","super530dmirage2000"]],
         ["Magic I","ir",["magic","magic 1","magic 550","magic i","magic r550","magic1","magic550","magici","magicr550","magik","majic","matra magic","matra r 550","matra r550","matramagic","matrar550","mirage magic","miragemagic","r 550","r 550 magic","r 550 magic 1","r 550 magic i","r550","r550 magic","r550magic","r550magic1","r550magici"]],
@@ -441,8 +441,8 @@
         }
     }
     const FOX_RE = /\bfox ?([1-4])\b/;
-    const COUNTER = { ir: 'FLARES', radar: 'CHAFFS', mixed: 'FLARES/CHAFFS', passive: 'EVADING', beam: 'EVADING', gun: 'EVADE', unknown: 'FLARES/CHAFFS' };
-    const REPLY = { ir: 'flares', radar: 'chaffs', mixed: 'flares chaffs', passive: 'evading', beam: 'evading', gun: 'evade' };
+    const COUNTER = { ir: 'FLARES', radar: 'CHAFFS', mixed: 'FLARES', passive: 'EVADING', beam: 'EVADING', gun: 'EVADE', unknown: 'FLARES' };
+    const REPLY = { ir: 'flares', radar: 'chaffs', mixed: 'flares', passive: 'evading', beam: 'evading', gun: 'evade' };
 
     function findWeapon(n) {
         const f = FOX_RE.exec(n);

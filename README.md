@@ -8,7 +8,7 @@ Install Tampermonkey, then open `geofs-defensive-ai.user.js` (raw) and confirm t
 ## Rules followed
 - `lock/locking <weapon> on <callsign>` creates a pending threat (LOCKED). No response is sent.
 - `away` / `firing` / `fox N away` launches it (LAUNCHED) and starts a 5 s countermeasure window.
-- IR weapons -> flares, radar weapons -> chaffs, guns/Fox 4 -> evade (guns are immediate).
+- IR weapons -> flares, radar weapons -> chaffs, mixed families use one single countermeasure (default flares) only when the family is truly ambiguous; explicit seeker variants are resolved individually (for example `r27er` -> `chaffs`, `r27et` -> `flares`), guns/Fox 4 -> evade (guns are immediate).
 - States: LOCKED, LAUNCHED, COUNTERED, HIT, MISSED, EXPIRED. Locks expire after 30 s.
 - Targets are matched by alias (A1, Alpha-1, Alpha One, ...). Threats aimed at others are ignored.
 - One auto reply per threat. Chat buffer: 50 messages / 60 s.
@@ -29,7 +29,7 @@ Air-to-air missile alias database (100 missiles, 4,697 aliases) with FOX type an
 - Fixed chat monitor initialization and switched automatic replies to GeoFS's native `multiplayer.setChatMessage` API.
 - Failed sends show a warning instead of marking a threat as countered; the debug panel includes the latest send status.
 - Expanded the built-in detector to 88 missile-family/variant entries with designations, common names, NATO names, and spelling variants.
-- Explicit IR variants use `flares`, radar variants use `chaffs`, unspecified IR/radar families use `flares chaffs`, and beam/passive guidance uses `evading` for roleplay.
+- Explicit IR variants use `flares`, radar variants use `chaffs`, mixed/unspecified families default to `flares`, and beam/passive guidance uses `evading` for roleplay.
 - This version's built-in detector was separate from the generated `missiledb/` data; v4.3 connects the full database.
 - Live delivery and countermeasure effectiveness are not guaranteed.
 
@@ -45,7 +45,7 @@ Run `node missiledb/embed.cjs --check` to verify the embedded lookup is up to da
 
 ## v4.4
 - Detects account names from nested account/profile records and the GeoFS account button, excluding icon text and other players' labels. Refreshes identity before processing chat; multi-word account aliases are supported.
-- All database aliases are case-insensitive: `aa3`, `AA3`, `aa-3`, and `aa 3` are recognized. AA-3 does not specify its seeker, so it uses `flares chaffs`; add `fox 1` or `fox 2` to specify radar or IR guidance.
+- All database aliases are case-insensitive: `aa3`, `AA3`, `aa-3`, and `aa 3` are recognized. AA-3 does not specify its seeker, so it defaults to `flares`; add `fox 1` or `fox 2` to specify radar or IR guidance.
 - Observes native published chat as well as network updates, including when GeoFS loads after the addon. Uses GeoFS sender account/session IDs for own-message detection and timestamps to distinguish repeated calls.
 - Pending automatic replies wait for cooldowns or a busy native chat slot and retry within the threat's five-second countermeasure window. They are dropped on expiry or when automatic replies are disabled, and never overwrite another queued chat message.
 - The debug panel shows identity sources, send status, and pending reply count. A queued reply still does not guarantee server delivery.
@@ -62,7 +62,7 @@ Run `node missiledb/embed.cjs --check` to verify the embedded lookup is up to da
 
 ## v4.6
 - Gun attacks now reply exactly `evade`: `fox4 <name>`, `fox 4 <name>`, `guns <name>`, `guns guns guns <name>`, and `gun <name>`. Existing `on`/`at` target forms remain supported; bare FOX-4 calls require a prior lock from that sender.
-- IR missiles still reply `flares`, radar missiles reply `chaffs`, and unspecified mixed-seeker families retain `flares chaffs` until guidance is identified. Beam/passive guidance retains `evading`.
+- IR missiles still reply `flares`, radar missiles reply `chaffs`, and mixed/unspecified families default to `flares` unless a seeker-specific FOX call or explicit guidance resolves otherwise. Beam/passive guidance retains `evading`.
 - Defense maintenance, identity refresh, and queued-reply retries tick every 1,000 ms. Incoming attacks are still processed immediately; this does not change the reply cooldown or five-second countermeasure window.
 - Both `evade` and legacy `evading` are accepted as manually posted evasion countermeasures.
 
